@@ -34,6 +34,7 @@ which pins an older numpy for GDAL.
 | `GET /v2/{model}/variables` | Variable catalog with units and legend colour stops |
 | `GET /v2/{model}/runs`, `/v2/{model}/runs/{run}` | Available runs and their valid times |
 | `GET /v2/health` | Latest run per model and its age (503 if none) |
+| `POST /v2/mcp` | MCP server for AI assistants (see below) |
 
 **Forecast parameters**: `vars` (comma list, default all), `hours` (default 384),
 `start=now|run`, `tz` (IANA name; default looked up from the coordinates), `run`
@@ -66,6 +67,33 @@ Semantics worth knowing:
 `run=latest` for "whatever is newest" (cached 5 min), or pin a run id from `/v2/{model}/runs`
 for immutable, CDN-cacheable URLs. Colour scales are fixed per variable, so tiles never
 seam or flicker, and the legend in `/v2/{model}/variables` is the exact scale used.
+
+## MCP (AI assistants)
+
+`forecast/mcp_server.py` serves the forecast as [Model Context Protocol](https://modelcontextprotocol.io)
+tools at `/v2/mcp`, built on the official `mcp` SDK. It speaks streamable HTTP, stateless, with
+plain JSON responses: any worker can answer any request, and it handles both the 2025 handshake
+protocols and the 2026-07-28 stateless revision. `GET` and `DELETE` return 405 (there is no
+server-to-client stream and no session).
+
+| Tool | Returns |
+|---|---|
+| `get_forecast(latitude, longitude, days=7, timezone="")` | Current conditions and a daily table (min/max temperature, rain, wind, gusts, humidity, cloud, solar) |
+| `get_hourly_forecast(latitude, longitude, hours=24, variables="", timezone="")` | A time-step table: hourly to 48 h, then 3-hourly to 7 days, then 6-hourly. Rain is the total since the previous row |
+| `list_variables()` | Variable ids, units and meaning |
+
+All tools are read-only and return compact Markdown, which keeps results inside hosts' size
+limits (Experts truncates at 8000 characters). Public access goes through the API-key router
+(`https://api.4shadow.io/v2/mcp`, header `api-key: <key>`). The router meters MCP routes
+separately from REST calls. Experts asks an admin to re-approve a connection whenever a tool's
+name, description or parameters change, so change them deliberately.
+
+```bash
+# Smoke test (2025 handshake; a tools/call needs the initialize step first)
+curl -s -X POST localhost:5003/v2/mcp -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+```
 
 ## Store format
 
