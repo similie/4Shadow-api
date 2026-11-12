@@ -23,6 +23,7 @@ pytest                                     # tests (pip install -r requirements-
 - **Store** (`store.py`): `data/forecast/<model>/runs/<YYYYMMDDHH>/<var>.npy`, int16 `[step, lat, lon]` with scale/offset in `manifest.json`. The grid is north→south, lon 0→360.
 - **API** (`api.py`): stateless; memory-maps the store. Points and tiles are direct bilinear index math (`grid.py`); no Redis, no preloading. Tiles use fixed palettes (`palettes.py`).
 - **Catalog** (`catalog.py`): add variables there. The GRIB selectors must match NOAA `.idx` text exactly.
+- **Legacy** (`legacy_v1.py`): temporary v1-shaped endpoints under `/legacy/v1` for clients still calling `/v1` through the API-key router. Don't extend it; delete it when v1 traffic stops.
 
 ## Running the Services
 

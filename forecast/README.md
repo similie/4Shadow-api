@@ -93,6 +93,14 @@ storage quantum and an optional palette. The next ingested run includes it.
 | `FORECAST_DOWNLOAD_WORKERS` | `6` | Concurrent step downloads |
 | `FORECAST_TILE_CACHE_SIZE` | `4096` | In-process rendered-tile LRU per worker |
 
+## Legacy v1 compatibility (temporary)
+
+`forecast/legacy_v1.py` serves the retired v1 service's response shapes (`/forecast`, `/point`,
+`/parameters`, `/tiles`, in v1 units such as Kelvin and Pa) from the v2 store under
+`/legacy/v1/...`, so existing v1 clients keep working after v1 is shut down. The API-key router
+maps public `/v1/...` routes there. It is excluded from the v2 OpenAPI docs. Delete the module, its
+JSON file and the router rows once no client calls `/v1`.
+
 ## Data attribution
 
 GFS data: NOAA/NCEP, public domain, distributed through the NOAA Open Data Dissemination

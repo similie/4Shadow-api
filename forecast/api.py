@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from . import __version__
+from . import __version__, legacy_v1
 from .catalog import CATALOGS, ModelCatalog, Variable, derive
 from .config import Settings, get_settings
 from .render import render_tile
@@ -289,6 +289,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         png = tile_bytes(model, r.id, v.id, step, z, x, y)
         cache = IMMUTABLE if run != "latest" else f"public, max-age={LATEST_MAX_AGE}"
         return Response(png, media_type="image/png", headers={"Cache-Control": cache, "X-Forecast-Run": r.id})
+
+    # v1 response shapes for clients still on the retired v1 service (see legacy_v1.py).
+    app.include_router(legacy_v1.build_router(stores, tile_bytes))
 
     return app
 
