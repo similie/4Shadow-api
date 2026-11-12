@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4Shadow (Foreshadow) is a Python weather forecasting and terrain hydrology API built on FastAPI. It provides these services:
 
 1. **Forecast v2** (`forecast/`, port 5003 on the server) — the replacement for the GFS tile server. Global point forecasts and map tiles from NOAA GFS. New GFS work goes here, not in `tile_renderers/`. See `forecast/README.md`.
-2. **GFS Weather Tile Server v1** (`tile_renderers/`, port 5001) — legacy; kept running until Parabl moves to v2.
+2. **GFS Weather Tile Server v1** (`tile_renderers/`, `downloaders/`) — retired on 2026-11-12. Its systemd units and download cron are disabled on the server. Public `/v1/...` routes are now served by `forecast/legacy_v1.py`. Don't change this code; it will be deleted.
 3. **Terrain Hydrology Engine** (port 5002) — Processes DEM elevation data to compute flood severity, landslide risk, and hydrological analysis via job-based processing
 
 ## Forecast v2 (`forecast/`)
