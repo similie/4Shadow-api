@@ -12,16 +12,16 @@ After=network.target
 
 [Service]
 User=root
-WorkingDirectory=/root/foreshadow-api
-EnvironmentFile=-/root/foreshadow-api/.env
-ExecStart=/root/foreshadow-api/.venv/bin/uvicorn forecast.api:app --host 0.0.0.0 --port 5003 --workers 2
+WorkingDirectory=/root/foreshadow-v2
+EnvironmentFile=-/root/foreshadow-v2/.env
+ExecStart=/root/foreshadow-v2/.venv/bin/uvicorn forecast.api:app --host 0.0.0.0 --port 5003 --workers 2
 Restart=always
 RestartSec=5
 CPUQuota=200%
 MemoryHigh=3G
 MemoryMax=6G
-StandardOutput=append:/root/foreshadow-api/forecast-api.log
-StandardError=append:/root/foreshadow-api/forecast-api.log
+StandardOutput=append:/root/foreshadow-v2/forecast-api.log
+StandardError=append:/root/foreshadow-v2/forecast-api.log
 
 [Install]
 WantedBy=multi-user.target
