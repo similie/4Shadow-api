@@ -21,7 +21,9 @@ pytest                                          # unit + API tests, no network n
 ```
 
 Production: `python -m forecast.ingest --loop` (see `deploy/forecast-ingest.service`) plus the
-API service (`deploy/forecast-api.service`).
+API service (`deploy/forecast-api.service`). v2 has its own dependency set
+(`forecast/requirements.txt`); give it its own venv rather than sharing the v1/terrain one,
+which pins an older numpy for GDAL.
 
 ## API
 

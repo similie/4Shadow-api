@@ -94,4 +94,3 @@ wheel==0.45.1
 xarray==2024.11.0
 yarg==0.1.10
 zstandard==0.23.0
-timezonefinder==9.2.0

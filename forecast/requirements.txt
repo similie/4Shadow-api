@@ -1,0 +1,12 @@
+# Forecast v2 runtime dependencies (independent of the v1/terrain requirements.txt, which pins
+# numpy 2.1 for GDAL). Install into its own venv: pip install -r forecast/requirements.txt
+numpy==2.5.4
+pygrib==2.1.6
+fastapi==0.115.6
+starlette==0.41.3
+pydantic==2.10.4
+uvicorn==0.34.0
+pillow==11.0.0
+requests==2.32.3
+python-dotenv==1.1.0
+timezonefinder==9.2.0

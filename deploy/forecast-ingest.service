@@ -12,9 +12,9 @@ Wants=network-online.target
 
 [Service]
 User=root
-WorkingDirectory=/root/foreshadow-api
-EnvironmentFile=-/root/foreshadow-api/.env
-ExecStart=/root/foreshadow-api/.venv/bin/python -m forecast.ingest --loop --poll 600
+WorkingDirectory=/root/foreshadow-v2
+EnvironmentFile=-/root/foreshadow-v2/.env
+ExecStart=/root/foreshadow-v2/.venv/bin/python -m forecast.ingest --loop --poll 600
 Restart=always
 RestartSec=60
 Nice=10
@@ -22,8 +22,8 @@ IOSchedulingClass=idle
 CPUQuota=100%
 MemoryHigh=2G
 MemoryMax=4G
-StandardOutput=append:/root/foreshadow-api/forecast-ingest.log
-StandardError=append:/root/foreshadow-api/forecast-ingest.log
+StandardOutput=append:/root/foreshadow-v2/forecast-ingest.log
+StandardError=append:/root/foreshadow-v2/forecast-ingest.log
 
 [Install]
 WantedBy=multi-user.target
