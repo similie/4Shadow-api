@@ -94,3 +94,14 @@ def test_publish_prunes_and_never_moves_latest_backwards(tmp_path, run_init):
     assert published_runs(root) == sorted(ids)[1:]
     manifest = json.loads((root / "runs" / ids[0] / "manifest.json").read_text())
     assert manifest["grid"] == COARSE.to_dict() and manifest["forecast_hours"] == [0, 1]
+
+
+def test_republishing_a_run_replaces_it_in_place(tmp_path, run_init):
+    rid = write_run(tmp_path, run_init)
+    store = RunStore(tmp_path, "gfs")
+    before = store.get(rid).manifest["created_at"]
+    write_run(tmp_path, run_init)  # e.g. re-ingest after adding a variable
+    runs_dir = tmp_path / "gfs" / "runs"
+    assert published_runs(tmp_path / "gfs") == [rid] and read_latest(tmp_path / "gfs") == rid
+    assert not any(p.name.endswith(".replaced") for p in runs_dir.iterdir())
+    assert store.get(rid).manifest["created_at"] >= before
