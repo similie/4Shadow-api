@@ -1,0 +1,29 @@
+# Foreshadow v2: keeps data/forecast/gfs up to date with the newest complete GFS run.
+#   sudo cp deploy/forecast-ingest.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now forecast-ingest
+#
+# Resource limits keep ingest polite on a shared host: low CPU/IO priority, one core,
+# bounded memory. A full run downloads ~2.4 GB and writes ~6 GB per run (2 runs kept).
+
+[Unit]
+Description=Foreshadow v2 GFS ingest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+WorkingDirectory=/root/foreshadow-api
+EnvironmentFile=-/root/foreshadow-api/.env
+ExecStart=/root/foreshadow-api/.venv/bin/python -m forecast.ingest --loop --poll 600
+Restart=always
+RestartSec=60
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=100%
+MemoryHigh=2G
+MemoryMax=4G
+StandardOutput=append:/root/foreshadow-api/forecast-ingest.log
+StandardError=append:/root/foreshadow-api/forecast-ingest.log
+
+[Install]
+WantedBy=multi-user.target
