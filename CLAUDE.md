@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4Shadow (Foreshadow) is a Python weather forecasting and terrain hydrology API built on FastAPI. It provides these services:
 
 1. **Forecast v2** (`forecast/`, port 5003 on the server) — the replacement for the GFS tile server. Global point forecasts and map tiles from NOAA GFS. New GFS work goes here, not in `tile_renderers/`. See `forecast/README.md`.
-2. **GFS Weather Tile Server v1** (`tile_renderers/`, `downloaders/`) — retired on 2026-11-12. Its systemd units and download cron are disabled on the server. Public `/v1/...` routes are now served by `forecast/legacy_v1.py`. Don't change this code; it will be deleted.
+2. **GFS Weather Tile Server v1** (`tile_renderers/`, `downloaders/`) — retired on 2026-11-12 and removed from the server on 2026-11-13. Public `/v1/...` routes are now served by `forecast/legacy_v1.py`. Don't change this code; it will be deleted.
 3. **Terrain Hydrology Engine** (port 5002) — Processes DEM elevation data to compute flood severity, landslide risk, and hydrological analysis via job-based processing
 
 ## Forecast v2 (`forecast/`)
@@ -21,8 +21,9 @@ pytest                                     # tests (pip install -r requirements-
 
 - **Ingest** (`ingest.py`, `sources/gfs.py`): reads each step's `.idx`, byte-range downloads only catalog messages, decodes with pygrib sequentially (ecCodes is not thread-safe), converts running totals and bucket averages into per-interval mean rates (`IntervalState`), and writes int16 arrays via `store.RunWriter`. A run is published only when complete: `<run>.incoming/` is renamed into place, then `latest.json` is replaced atomically.
 - **Store** (`store.py`): `data/forecast/<model>/runs/<YYYYMMDDHH>/<var>.npy`, int16 `[step, lat, lon]` with scale/offset in `manifest.json`. The grid is north→south, lon 0→360.
-- **API** (`api.py`): stateless; memory-maps the store. Points and tiles are direct bilinear index math (`grid.py`); no Redis, no preloading. Tiles use fixed palettes (`palettes.py`).
+- **API** (`api.py`): stateless; memory-maps the store. Query logic shared with MCP lives in `service.py` (raises `ForecastError`, which `api.py` turns into JSON errors). Points and tiles are direct bilinear index math (`grid.py`); no Redis, no preloading. Tiles use fixed palettes (`palettes.py`).
 - **Catalog** (`catalog.py`): add variables there. The GRIB selectors must match NOAA `.idx` text exactly.
+- **MCP** (`mcp_server.py`): forecast tools for AI assistants at `/v2/mcp` (official `mcp` SDK, stateless streamable HTTP, JSON responses). Tools wrap `service.point_forecast`, the same code as `GET /v2/forecast`. Keep tool parameters plain types with empty defaults (no `X | None`) and results compact Markdown; changing a tool's name, description or schema forces re-approval in Experts.
 - **Legacy** (`legacy_v1.py`): temporary v1-shaped endpoints under `/legacy/v1` for clients still calling `/v1` through the API-key router. Don't extend it; delete it when v1 traffic stops.
 
 ## Running the Services
