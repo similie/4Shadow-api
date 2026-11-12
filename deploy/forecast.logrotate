@@ -1,0 +1,12 @@
+# Rotate the v2 logs (systemd appends to these files, so truncate in place).
+#   sudo cp deploy/forecast.logrotate /etc/logrotate.d/foreshadow-v2
+/root/foreshadow-v2/forecast-api.log /root/foreshadow-v2/forecast-ingest.log {
+    daily
+    rotate 7
+    maxsize 200M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
