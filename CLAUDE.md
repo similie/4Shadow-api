@@ -4,10 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-4Shadow (Foreshadow) is a Python weather forecasting and terrain hydrology API built on FastAPI. It provides two independent services:
+4Shadow (Foreshadow) is a Python weather forecasting and terrain hydrology API built on FastAPI. It provides these services:
 
-1. **GFS Weather Tile Server** (port 5001) — Serves weather forecast tiles, point forecasts, and timeseries from NOAA GFS GRIB2 data
-2. **Terrain Hydrology Engine** (port 5002) — Processes DEM elevation data to compute flood severity, landslide risk, and hydrological analysis via job-based processing
+1. **Forecast v2** (`forecast/`, port 5003 on the server) — the replacement for the GFS tile server. Global point forecasts and map tiles from NOAA GFS. New GFS work goes here, not in `tile_renderers/`. See `forecast/README.md`.
+2. **GFS Weather Tile Server v1** (`tile_renderers/`, port 5001) — legacy; kept running until Parabl moves to v2.
+3. **Terrain Hydrology Engine** (port 5002) — Processes DEM elevation data to compute flood severity, landslide risk, and hydrological analysis via job-based processing
+
+## Forecast v2 (`forecast/`)
+
+```bash
+python -m forecast.ingest --max-fhr 24     # dev: ingest hours 0-24 of the newest complete GFS run
+python -m forecast.ingest --loop           # prod: keep ingesting new runs (deploy/forecast-ingest.service)
+uvicorn forecast.api:app --port 5003       # API; docs at /v2/docs (deploy/forecast-api.service)
+pytest                                     # tests (pip install -r requirements-dev.txt); no network needed
+```
+
+- **Ingest** (`ingest.py`, `sources/gfs.py`): reads each step's `.idx`, byte-range downloads only catalog messages, decodes with pygrib sequentially (ecCodes is not thread-safe), converts running totals and bucket averages into per-interval mean rates (`IntervalState`), and writes int16 arrays via `store.RunWriter`. A run is published only when complete: `<run>.incoming/` is renamed into place, then `latest.json` is replaced atomically.
+- **Store** (`store.py`): `data/forecast/<model>/runs/<YYYYMMDDHH>/<var>.npy`, int16 `[step, lat, lon]` with scale/offset in `manifest.json`. The grid is north→south, lon 0→360.
+- **API** (`api.py`): stateless; memory-maps the store. Points and tiles are direct bilinear index math (`grid.py`); no Redis, no preloading. Tiles use fixed palettes (`palettes.py`).
+- **Catalog** (`catalog.py`): add variables there. The GRIB selectors must match NOAA `.idx` text exactly.
 
 ## Running the Services
 
