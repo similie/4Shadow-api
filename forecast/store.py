@@ -187,8 +187,14 @@ class RunWriter:
         }
         (self.dir / "manifest.json").write_text(json.dumps(manifest, indent=1))
         if self.final_dir.exists():
-            shutil.rmtree(self.final_dir)
-        os.replace(self.dir, self.final_dir)
+            # Re-ingest of a published run: swap with two renames so readers never see it missing.
+            replaced = self.final_dir.with_name(self.final_dir.name + ".replaced")
+            shutil.rmtree(replaced, ignore_errors=True)
+            os.replace(self.final_dir, replaced)
+            os.replace(self.dir, self.final_dir)
+            shutil.rmtree(replaced, ignore_errors=True)
+        else:
+            os.replace(self.dir, self.final_dir)
         current = read_latest(self.model_root)
         if current is None or self.id >= current:
             write_latest(self.model_root, self.id)
