@@ -1,9 +1,9 @@
-# Foreshadow v2 API (point forecasts + tiles), side by side with the v1 service on :5001.
+# Foreshadow v2 API (point forecasts + tiles; also serves the legacy /v1 shapes under /legacy/v1).
 #   sudo cp deploy/forecast-api.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now forecast-api
 #
 # Public traffic reaches it through the API-key router (api.4shadow.io -> routing-manager
-# container -> http://host.docker.internal:5003), so it binds 0.0.0.0 like v1 on :5001; the
+# container -> http://host.docker.internal:5003), so it binds 0.0.0.0; the
 # port itself must not be reachable from the internet. Check it is free first
 # (ss -ltnp | grep 5003). Workers memory-map the store, so they share one copy of the data
 # through the page cache. Pinned-run tile URLs are immutable, so a CDN/nginx cache helps.
