@@ -17,7 +17,7 @@ from fastapi import FastAPI, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from . import __version__, legacy_v1, mcp_server
+from . import __version__, fields, legacy_v1, mcp_server
 from .catalog import CATALOGS
 from .config import Settings, get_settings
 from .places import ATTRIBUTION as PLACES_ATTRIBUTION
@@ -85,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "runs": "/v2/{model}/runs",
                 "variables": "/v2/{model}/variables",
                 "tiles": "/v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png",
+                "fields": "/v2/{model}/fields/{run}/{time}?vars=u10,v10&stride=4",
             },
         }
 
@@ -217,6 +218,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         png = tile_bytes(model, r.id, v.id, step, z, x, y)
         cache = IMMUTABLE if run != "latest" else f"public, max-age={LATEST_MAX_AGE}"
         return Response(png, media_type="image/png", headers={"Cache-Control": cache, "X-Forecast-Run": r.id})
+
+    @app.get("/v2/{model}/fields/{run}/{time}", tags=["tiles"], response_class=Response,
+             responses={200: {"content": {"application/octet-stream": {}},
+                              "description": "4SF1 binary: header + int16 arrays (see forecast/fields.py)"}})
+    def field(
+        model: str,
+        run: str,
+        time: str = Path(..., description="fNNN (forecast hour) or YYYYMMDDHH (valid time, UTC)"),
+        variables: str = Query(..., alias="vars", description="Comma-separated stored variable ids, at most 4, e.g. u10,v10"),
+        stride: int = Query(1, ge=1, le=fields.MAX_STRIDE, description="Take every Nth cell: 1 = 0.25°, 2 = 0.5°, 4 = 1°"),
+        bbox: str | None = Query(None, description="west,south,east,north in degrees; default the whole globe"),
+    ):
+        """Raw gridded values for one time step, for client-side rendering (WebGL colour layers, wind
+        particles, contours). A small binary: an 8-byte preamble ("4SF1" + header length), a JSON header
+        with the grid, units, scale and offset, then one int16 array per variable (rows north to south).
+        value = raw * scale + offset; -32768 is missing."""
+        cat = get_catalog(model)
+        r = get_run(stores, model, run)
+        body = fields.encode_field(cat, r, time, [s.strip() for s in variables.split(",") if s.strip()], stride, bbox)
+        cache = IMMUTABLE if run != "latest" else f"public, max-age={LATEST_MAX_AGE}"
+        return Response(body, media_type="application/octet-stream",
+                        headers={"Cache-Control": cache, "X-Forecast-Run": r.id})
 
     # v1 response shapes for clients still on the retired v1 service (see legacy_v1.py).
     app.include_router(legacy_v1.build_router(stores, tile_bytes))
