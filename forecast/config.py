@@ -22,6 +22,7 @@ class Settings:
     step_wait_seconds: int = 0
     gfs_base_url: str = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
     tile_cache_size: int = 4096
+    places_db: Path | None = None  # place search index (python -m forecast.places build); None turns it off
 
 
 def get_settings() -> Settings:
@@ -34,4 +35,5 @@ def get_settings() -> Settings:
         step_wait_seconds=int(os.getenv("FORECAST_STEP_WAIT_SECONDS", "0")),
         gfs_base_url=os.getenv("GFS_BASE_URL", "https://noaa-gfs-bdp-pds.s3.amazonaws.com"),
         tile_cache_size=int(os.getenv("FORECAST_TILE_CACHE_SIZE", "4096")),
+        places_db=Path(os.getenv("FORECAST_PLACES_DB") or REPO_ROOT / "data" / "places" / "places.sqlite").expanduser(),
     )

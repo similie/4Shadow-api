@@ -23,6 +23,7 @@ pytest                                     # tests (pip install -r requirements-
 - **Store** (`store.py`): `data/forecast/<model>/runs/<YYYYMMDDHH>/<var>.npy`, int16 `[step, lat, lon]` with scale/offset in `manifest.json`. The grid is north→south, lon 0→360.
 - **API** (`api.py`): stateless; memory-maps the store. Query logic shared with MCP lives in `service.py` (raises `ForecastError`, which `api.py` turns into JSON errors). Points and tiles are direct bilinear index math (`grid.py`); no Redis, no preloading. Tiles use fixed palettes (`palettes.py`).
 - **Catalog** (`catalog.py`): add variables there. The GRIB selectors must match NOAA `.idx` text exactly.
+- **Places** (`places.py`): place names to coordinates and coordinates to the nearest town, from GeoNames in a read-only SQLite index (`python -m forecast.places build`; `GET /v2/places`, `q=` on `/v2/forecast`, `location` in the MCP tools).
 - **MCP** (`mcp_server.py`): forecast tools for AI assistants at `/v2/mcp` (official `mcp` SDK, stateless streamable HTTP, JSON responses). Tools wrap `service.point_forecast`, the same code as `GET /v2/forecast`. Keep tool parameters plain types with empty defaults (no `X | None`) and results compact Markdown; changing a tool's name, description or schema forces re-approval in Experts.
 - **Legacy** (`legacy_v1.py`): temporary v1-shaped endpoints under `/legacy/v1` for clients still calling `/v1` through the API-key router. Don't extend it; delete it when v1 traffic stops.
 

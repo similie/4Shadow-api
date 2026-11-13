@@ -20,6 +20,8 @@ from fastapi.responses import JSONResponse, Response
 from . import __version__, legacy_v1, mcp_server
 from .catalog import CATALOGS
 from .config import Settings, get_settings
+from .places import ATTRIBUTION as PLACES_ATTRIBUTION
+from .places import PlaceIndex
 from .render import render_tile
 from .service import ForecastError, get_catalog, get_run, point_forecast, step_for
 from .store import RunStore, iso, parse_run_id
@@ -33,7 +35,8 @@ IMMUTABLE = "public, max-age=31536000, immutable"
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     stores = {model: RunStore(settings.data_root, model) for model in CATALOGS}
-    mcp = mcp_server.build_server(stores)
+    places = PlaceIndex(settings.places_db)
+    mcp = mcp_server.build_server(stores, places)
     mcp_routes = mcp_server.http_routes(mcp)  # creates the session manager the lifespan runs
 
     @asynccontextmanager
@@ -76,6 +79,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "models": {m: c.title for m, c in CATALOGS.items()},
             "endpoints": {
                 "forecast": "/v2/forecast?lat=-8.56&lon=125.57",
+                "forecast_by_place": "/v2/forecast?q=Dili, Timor-Leste",
+                "places": "/v2/places?q=Paris",
+                "nearest_places": "/v2/places?lat=-8.56&lon=125.57",
                 "runs": "/v2/{model}/runs",
                 "variables": "/v2/{model}/variables",
                 "tiles": "/v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png",
@@ -136,10 +142,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "daily": [{"id": d.id, "source": d.source, "aggregation": d.how, "units": d.units} for d in cat.daily],
         }
 
+    @app.get("/v2/places", tags=["places"])
+    def find_places(
+        q: str | None = Query(None, max_length=200, description=(
+            "Place name, optionally narrowed by region or country after a comma: 'Paris', 'Paris, Texas', "
+            "'Same, Timor-Leste'. Accents and case don't matter.")),
+        lat: float | None = Query(None, ge=-90, le=90, description="With lon instead of q: nearest towns and villages"),
+        lon: float | None = Query(None, ge=-180, le=360),
+        limit: int = Query(5, ge=1, le=20),
+        min_population: int = Query(0, ge=0, description="With lat/lon: skip smaller places (seats of government are always kept)"),
+    ):
+        """Places matching a name (best match first), or the populated places nearest a point (closest first,
+        within 50 km). Place data: GeoNames (CC BY 4.0)."""
+        if q and q.strip():
+            results, query = places.search(q, limit), {"q": q}
+        elif lat is not None and lon is not None:
+            results, query = places.nearest(lat, lon, limit, min_population=min_population), {"lat": lat, "lon": lon}
+        else:
+            raise ForecastError(400, "Give q (a place name) or lat and lon")
+        return JSONResponse({"query": query, "results": [p.to_dict() for p in results], "attribution": PLACES_ATTRIBUTION},
+                            headers={"Cache-Control": "public, max-age=86400"})
+
     @app.get("/v2/forecast", tags=["forecast"])
     def forecast(
-        lat: float = Query(..., ge=-90, le=90, description="Latitude in degrees"),
-        lon: float = Query(..., ge=-180, le=360, description="Longitude in degrees"),
+        lat: float | None = Query(None, ge=-90, le=90, description="Latitude in degrees (or give q)"),
+        lon: float | None = Query(None, ge=-180, le=360, description="Longitude in degrees (or give q)"),
+        q: str | None = Query(None, max_length=200, description=(
+            "Place name instead of lat/lon, e.g. 'Paris, France'. The best match is used; location.place says "
+            "which, and location.alternatives lists other places with the same name.")),
         model: str = Query("gfs"),
         run: str = Query("latest", description="'latest' or a run id YYYYMMDDHH"),
         variables: str | None = Query(None, alias="vars", description="Comma-separated variable ids; default all"),
@@ -148,8 +178,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tz: str | None = Query(None, description="IANA time zone for daily aggregation; default from coordinates"),
         daily: bool = Query(True),
     ):
-        r, body = point_forecast(stores, lat, lon, model=model, run=run, variables=variables, hours=hours,
+        if q and q.strip():
+            if lat is not None or lon is not None:
+                raise ForecastError(400, "Give either q or lat and lon, not both")
+            where = places.resolve(q)
+        elif lat is not None and lon is not None:
+            where = places.at(lat, lon)
+        else:
+            raise ForecastError(400, "Give lat and lon, or q (a place name)")
+        r, body = point_forecast(stores, where.lat, where.lon, model=model, run=run, variables=variables, hours=hours,
                                  start=start, tz=tz, daily=daily)
+        body["location"].update(where.location_fields())
+        if where.place is not None or where.nearby is not None:
+            body["source"] = {**body["source"], "places": PLACES_ATTRIBUTION}
         headers = {"Cache-Control": f"public, max-age={LATEST_MAX_AGE}", "X-Forecast-Run": r.id}
         return JSONResponse(body, headers=headers)
 
