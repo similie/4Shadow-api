@@ -92,3 +92,44 @@ def test_tile_errors(client):
     assert client.get("/v2/gfs/tiles/latest/t2m/f003/1/2/0.png").status_code == 404
     assert client.get("/v2/gfs/tiles/latest/t2m/f003/13/0/0.png").status_code == 422
     assert client.get("/v2/ecmwf/tiles/latest/t2m/f003/1/0/0.png").status_code == 404
+
+
+@pytest.fixture
+def pclient(store_root, places_db):
+    return TestClient(create_app(Settings(data_root=store_root, places_db=places_db)))
+
+
+def test_places_search_and_nearest(pclient):
+    r = pclient.get("/v2/places", params={"q": "Paris"})
+    assert r.status_code == 200 and "GeoNames" in r.json()["attribution"]
+    top = r.json()["results"][0]
+    assert top["display_name"] == "Paris, Île-de-France, France" and top["kind"] == "capital city"
+    assert (top["lat"], top["lon"], top["country_code"], top["timezone"]) == (48.85341, 2.3488, "FR", "Europe/Paris")
+    r = pclient.get("/v2/places", params={"lat": -8.556, "lon": 125.56, "limit": 1})
+    assert [(p["name"], round(p["distance_km"])) for p in r.json()["results"]] == [("Dili", 2)]
+    assert pclient.get("/v2/places").status_code == 400
+    assert pclient.get("/v2/places", params={"q": "Atlantis"}).json()["results"] == []
+
+
+def test_forecast_by_place_name(pclient):
+    r = pclient.get("/v2/forecast", params={"q": "Paris, Texas", "hours": 3})
+    assert r.status_code == 200, r.text
+    loc = r.json()["location"]
+    assert loc["query"] == "Paris, Texas" and loc["place"]["display_name"] == "Paris, Texas, United States"
+    assert (loc["lat"], loc["lon"]) == (33.66094, -95.55551) and loc["alternatives"] == []
+    assert r.json()["timezone"]["name"] == "America/Chicago" and "places" in r.json()["source"]
+    alts = pclient.get("/v2/forecast", params={"q": "Paris", "hours": 1}).json()["location"]["alternatives"]
+    assert [a["display_name"] for a in alts] == ["Paris, Texas, United States", "Paris, Tennessee, United States"]
+
+    near = pclient.get("/v2/forecast", params={"lat": -8.556, "lon": 125.56, "hours": 1}).json()["location"]
+    assert near["nearest_place"]["name"] == "Dili" and "place" not in near
+
+    assert pclient.get("/v2/forecast", params={"q": "Atlantis"}).status_code == 404
+    assert pclient.get("/v2/forecast").status_code == 400
+    assert pclient.get("/v2/forecast", params={"q": "Paris", "lat": 1, "lon": 2}).status_code == 400
+
+
+def test_forecast_without_place_index(client):
+    assert client.get("/v2/forecast", params={"q": "Paris"}).status_code == 503
+    loc = client.get("/v2/forecast", params={"lat": -8.556, "lon": 125.56, "hours": 1}).json()["location"]
+    assert "nearest_place" not in loc

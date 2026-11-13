@@ -29,14 +29,16 @@ which pins an older numpy for GDAL.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /v2/forecast?lat&lon` | Point forecast: `current`, `timeseries`, local-day `daily` |
+| `GET /v2/forecast?lat&lon` or `?q=` | Point forecast: `current`, `timeseries`, local-day `daily` |
+| `GET /v2/places?q=` or `?lat&lon` | Place search: names to coordinates, or the nearest towns to a point |
 | `GET /v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png` | XYZ map tiles |
 | `GET /v2/{model}/variables` | Variable catalog with units and legend colour stops |
 | `GET /v2/{model}/runs`, `/v2/{model}/runs/{run}` | Available runs and their valid times |
 | `GET /v2/health` | Latest run per model and its age (503 if none) |
 | `POST /v2/mcp` | MCP server for AI assistants (see below) |
 
-**Forecast parameters**: `vars` (comma list, default all), `hours` (default 384),
+**Forecast parameters**: `lat` and `lon`, or `q` (a place name such as `Paris, France`; the best
+match is used), `vars` (comma list, default all), `hours` (default 384),
 `start=now|run`, `tz` (IANA name; default looked up from the coordinates), `run`
 (`latest` or `YYYYMMDDHH`), `daily=true|false`.
 
@@ -62,6 +64,30 @@ Semantics worth knowing:
 - Daily values use **local calendar days** (`hours_covered` < 24 marks a partial day).
 - Values are bilinear between the four surrounding 0.25° cells. `model_elevation_m` is
   the model's terrain height there, useful for elevation corrections.
+- With `q`, `location` adds `query`, `place` (the match) and `alternatives` (other places with the
+  same name). With `lat`/`lon` it adds `nearest_place` (the closest town or village within 50 km).
+
+## Places
+
+`forecast/places.py` turns place names into coordinates and coordinates into the nearest town,
+from [GeoNames](https://www.geonames.org) data held in one read-only SQLite file
+(`data/places/places.sqlite`). Lookups never leave the server.
+
+```bash
+python -m forecast.places build --dump allCountries   # production: ~2-3 GB index, every village plus
+                                                      # countries, regions, seas, bays, islands, ports
+python -m forecast.places build                       # dev: cities500 (~240k places, ~70 MB, seconds)
+python -m forecast.places search "Same, Timor-Leste"
+python -m forecast.places nearest -8.556 125.560
+```
+
+Names match regardless of case, accents and punctuation (`Díli` = `dili`), in any language
+GeoNames records (`Lisboa`, `Москва`). Text after a comma narrows by region or country
+(`Paris, Texas`); without a comma, trailing words are tried as the country (`paris france`).
+Ranking: a place's own name, then alternate names, then names that only start with the query;
+within each, larger and more important places (capitals, countries) first. A rebuild writes a new
+file and renames it into place; running APIs pick it up on their next lookup. Rebuild now and then
+(GeoNames changes slowly); there is no need to restart anything.
 
 **Tiles**: `time` is `fNNN` (forecast hour) or `YYYYMMDDHH` (valid time, UTC). Use
 `run=latest` for "whatever is newest" (cached 5 min), or pin a run id from `/v2/{model}/runs`
@@ -78,9 +104,14 @@ server-to-client stream and no session).
 
 | Tool | Returns |
 |---|---|
-| `get_forecast(latitude, longitude, days=7, timezone="")` | Current conditions and a daily table (min/max temperature, rain, wind, gusts, humidity, cloud, solar) |
-| `get_hourly_forecast(latitude, longitude, hours=24, variables="", timezone="")` | A time-step table: hourly to 48 h, then 3-hourly to 7 days, then 6-hourly. Rain is the total since the previous row |
+| `get_forecast(location, days=7, timezone="")` | Current conditions and a daily table (min/max temperature, rain, wind, gusts, humidity, cloud, solar) |
+| `get_hourly_forecast(location, hours=24, variables="", timezone="")` | A time-step table: hourly to 48 h, then 3-hourly to 7 days, then 6-hourly. Rain is the total since the previous row |
+| `find_place(query, limit=5)` | Places matching a name (or nearest to coordinates), with region, country, kind, population |
 | `list_variables()` | Variable ids, units and meaning |
+
+`location` is a place name (`Paris`, `Same, Timor-Leste`) or `latitude, longitude`. Each forecast
+starts by saying which place it used and naming other places with the same name, so the model
+can catch a wrong match and ask the user.
 
 All tools are read-only and return compact Markdown, which keeps results inside hosts' size
 limits (Experts truncates at 8000 characters). Public access goes through the API-key router
@@ -120,6 +151,7 @@ storage quantum and an optional palette. The next ingested run includes it.
 | `FORECAST_MAX_FHR` | `384` | Last forecast hour to ingest |
 | `FORECAST_DOWNLOAD_WORKERS` | `6` | Concurrent step downloads |
 | `FORECAST_TILE_CACHE_SIZE` | `4096` | In-process rendered-tile LRU per worker |
+| `FORECAST_PLACES_DB` | `<repo>/data/places/places.sqlite` | Place index (`python -m forecast.places build`) |
 
 ## Legacy v1 compatibility (temporary)
 
@@ -132,4 +164,5 @@ JSON file and the router rows once no client calls `/v1`.
 ## Data attribution
 
 GFS data: NOAA/NCEP, public domain, distributed through the NOAA Open Data Dissemination
-program on AWS (`noaa-gfs-bdp-pds`).
+program on AWS (`noaa-gfs-bdp-pds`). Place names: GeoNames (geonames.org), licensed under
+CC BY 4.0; responses that use them say so.

@@ -149,7 +149,7 @@ def point_forecast(
         "init_time": iso(r.init_time),
         "location": {
             "lat": lat,
-            "lon": (lon + 180.0) % 360.0 - 180.0,
+            "lon": round((lon + 180.0) % 360.0 - 180.0, 6),  # -180..180, without float noise from the wrap
             "nearest_grid_point": {"lat": glat, "lon": glon},
             "model_elevation_m": r.point_static("orog", lat, lon),
             "land_fraction": r.point_static("land", lat, lon),
