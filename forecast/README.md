@@ -32,6 +32,7 @@ which pins an older numpy for GDAL.
 | `GET /v2/forecast?lat&lon` or `?q=` | Point forecast: `current`, `timeseries`, local-day `daily` |
 | `GET /v2/places?q=` or `?lat&lon` | Place search: names to coordinates, or the nearest towns to a point |
 | `GET /v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png` | XYZ map tiles |
+| `GET /v2/{model}/fields/{run}/{time}?vars=u10,v10` | Raw gridded values (binary) for client-side rendering |
 | `GET /v2/{model}/variables` | Variable catalog with units and legend colour stops |
 | `GET /v2/{model}/runs`, `/v2/{model}/runs/{run}` | Available runs and their valid times |
 | `GET /v2/health` | Latest run per model and its age (503 if none) |
@@ -66,6 +67,16 @@ Semantics worth knowing:
   the model's terrain height there, useful for elevation corrections.
 - With `q`, `location` adds `query`, `place` (the match) and `alternatives` (other places with the
   same name). With `lat`/`lon` it adds `nearest_place` (the closest town or village within 50 km).
+
+**Fields** are the numbers behind the tiles, for clients that render, animate or analyse the data
+themselves (WebGL colour layers, wind particles, isobars). `vars` takes up to 4 stored variables
+(`u10,v10`, not the derived `wind_speed`), `stride` thins the grid (1 = 0.25°, 2 = 0.5°, 4 = 1°) and
+`bbox=west,south,east,north` crops it (east < west crosses the antimeridian); the default is the
+whole globe, starting at -180. The body is format "4SF1": `"4SF1"`, a uint32 LE header length, a
+JSON header (grid, valid time, per-variable units/scale/offset), then one int16 LE array per
+variable, rows north to south, starting on an 8-byte boundary. `value = raw * scale + offset`,
+`-32768` = missing. A global 0.5° wind field (u10 + v10) is about 1 MB; `forecast.fields.decode_field`
+reads it in Python, and the JS SDK in the browser.
 
 ## Places
 
