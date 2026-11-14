@@ -25,6 +25,17 @@ def synthetic_value(var_id: str, fhr: int, lat2d: np.ndarray, lon2d: np.ndarray)
         return None if fhr == 0 else np.full(shape, 200.0, np.float32)
     if var_id == "mslp":
         return np.full(shape, 1013.2, np.float32)
+    if var_id.startswith(("wave_", "wind_wave_", "swell_")):
+        # Sea state: "land" east of 180° is missing. Directions alternate 350°/10° by column,
+        # so a point between two columns tests that directions are blended as angles.
+        if var_id.endswith("_dir"):
+            col = np.rint(lon2d / 2.5).astype(int) if lon2d.size else lon2d
+            vals = np.where(col % 2 == 0, 350.0, 10.0)
+        elif var_id.endswith("_period"):
+            vals = np.full(shape, 9.0)
+        else:
+            vals = np.full(shape, 2.0 + 0.01 * fhr)
+        return np.where(lon2d >= 180.0, np.nan, vals).astype(np.float32)
     return np.full(shape, 50.0, np.float32)
 
 

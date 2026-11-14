@@ -3,6 +3,9 @@
 Every GFS GRIB2 file on NOAA's open-data bucket has a sibling ``.idx`` listing each
 message's byte offset. We fetch only the messages in the catalog (~2% of each ~540 MB file)
 with HTTP Range requests, which makes ingesting all four daily runs cheap.
+
+Two file families ("products") share the run's 0.25° grid and forecast steps: ``atmos``
+(gfs.tCCz.pgrb2.0p25.fFFF) and ``wave`` (GFS-Wave, gfswave.tCCz.global.0p25.fFFF.grib2).
 """
 
 from __future__ import annotations
@@ -34,20 +37,28 @@ def forecast_hours(max_fhr: int = MAX_FHR) -> list[int]:
     return list(range(0, min(max_fhr, 120) + 1)) + list(range(123, max_fhr + 1, 3))
 
 
-def file_url(base_url: str, run: datetime, fhr: int) -> str:
-    return (
-        f"{base_url}/gfs.{run:%Y%m%d}/{run:%H}/atmos/"
-        f"gfs.t{run:%H}z.pgrb2.0p25.f{fhr:03d}"
-    )
+PRODUCTS = ("atmos", "wave")
 
 
-def source_info(base_url: str, run: datetime) -> dict:
-    return {
+def file_url(base_url: str, run: datetime, fhr: int, product: str = "atmos") -> str:
+    if product == "atmos":
+        return f"{base_url}/gfs.{run:%Y%m%d}/{run:%H}/atmos/gfs.t{run:%H}z.pgrb2.0p25.f{fhr:03d}"
+    if product == "wave":
+        return f"{base_url}/gfs.{run:%Y%m%d}/{run:%H}/wave/gridded/gfswave.t{run:%H}z.global.0p25.f{fhr:03d}.grib2"
+    raise ValueError(f"Unknown GFS product {product!r}")
+
+
+def source_info(base_url: str, run: datetime, products=("atmos",)) -> dict:
+    info = {
         "provider": "NOAA/NCEP Global Forecast System (GFS), 0.25°",
         "distribution": "NOAA Open Data Dissemination (AWS bucket noaa-gfs-bdp-pds)",
         "url": f"{base_url}/gfs.{run:%Y%m%d}/{run:%H}/atmos/",
         "license": "Public domain (U.S. Government work)",
     }
+    if "wave" in products:
+        info["provider"] += ", with GFS-Wave (WAVEWATCH III) sea state"
+        info["wave_url"] = f"{base_url}/gfs.{run:%Y%m%d}/{run:%H}/wave/gridded/"
+    return info
 
 
 # --------------------------------------------------------------------------- .idx parsing
@@ -180,15 +191,17 @@ class GfsClient:
             time.sleep(min(2**attempt, 20))
         raise RuntimeError(f"{method} {url} failed after {self.retries} attempts: {last}")
 
-    def has_idx(self, run: datetime, fhr: int) -> bool:
-        return self._request("HEAD", file_url(self.base_url, run, fhr) + ".idx", not_found_ok=True) is not None
+    def has_idx(self, run: datetime, fhr: int, product: str = "atmos") -> bool:
+        url = file_url(self.base_url, run, fhr, product) + ".idx"
+        return self._request("HEAD", url, not_found_ok=True) is not None
 
-    def idx(self, run: datetime, fhr: int) -> list[IdxRecord] | None:
-        resp = self._request("GET", file_url(self.base_url, run, fhr) + ".idx", not_found_ok=True)
+    def idx(self, run: datetime, fhr: int, product: str = "atmos") -> list[IdxRecord] | None:
+        resp = self._request("GET", file_url(self.base_url, run, fhr, product) + ".idx", not_found_ok=True)
         return None if resp is None else parse_idx(resp.text)
 
-    def fetch_records(self, run: datetime, fhr: int, records: list[IdxRecord]) -> dict[int, bytes]:
-        url = file_url(self.base_url, run, fhr)
+    def fetch_records(self, run: datetime, fhr: int, records: list[IdxRecord],
+                      product: str = "atmos") -> dict[int, bytes]:
+        url = file_url(self.base_url, run, fhr, product)
         blobs: dict[int, bytes] = {}
         for group in merge_ranges(records):
             rng = f"bytes={group.start}-" + ("" if group.end is None else str(group.end))

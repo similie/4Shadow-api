@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -208,6 +209,13 @@ class RunWriter:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
+def haversine_km(lat1, lon1, lat2, lon2) -> np.ndarray:
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dp, dl = p2 - p1, np.radians(np.asarray(lon2) - lon1)
+    h = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
+    return 2 * 6371.0 * np.arcsin(np.sqrt(np.minimum(h, 1.0)))
+
+
 # --------------------------------------------------------------------------- reading
 
 
@@ -257,16 +265,53 @@ class Run:
         delta = (valid - self.init_time).total_seconds() / 3600.0
         return self.step_for_hour(int(delta)) if delta == int(delta) else None
 
-    def point_series(self, var_ids, lat: float, lon: float) -> dict[str, np.ndarray]:
-        """Bilinear-interpolated values over every step for each variable."""
+    def point_series(self, var_ids, lat: float, lon: float, circular=()) -> dict[str, np.ndarray]:
+        """Bilinear-interpolated values over every step for each variable.
+
+        Variables in ``circular`` are directions in degrees: they are blended as unit vectors,
+        so 350° and 10° give 0°, not 180°.
+        """
         i0, i1, wi = (np.asarray(a).item() for a in self.grid.row_weights(lat))
         j0, j1, wj = (np.asarray(a).item() for a in self.grid.col_weights(lon))
         out = {}
         for vid in var_ids:
             arr, meta = self.array(vid), self.variables[vid]
             corners = [decode(arr[:, a, b], meta["scale"], meta["offset"]) for a, b in ((i0, j0), (i0, j1), (i1, j0), (i1, j1))]
-            out[vid] = bilinear(*corners, wi, wj)
+            if vid in circular:
+                rad = [np.radians(c) for c in corners]
+                sin = bilinear(*(np.sin(r) for r in rad), wi, wj)
+                cos = bilinear(*(np.cos(r) for r in rad), wi, wj)
+                out[vid] = np.mod(np.degrees(np.arctan2(sin, cos)), 360.0).astype(np.float32)
+            else:
+                out[vid] = bilinear(*corners, wi, wj)
         return out
+
+    def sea_point(self, var_id: str, lat: float, lon: float, max_km: float = 50.0) -> tuple[float, float, float] | None:
+        """For a sea-only variable at a point with no sea around it (on land or a coast the
+        model grid treats as land): the nearest grid point with data within ``max_km``, as
+        (lat, lon, distance_km). None when the point's own cells have data, or none is near."""
+        g = self.grid
+        arr = self.array(var_id)
+        i0, i1, _ = (int(np.asarray(a).item()) for a in g.row_weights(lat))
+        j0, j1, _ = (int(np.asarray(a).item()) for a in g.col_weights(lon))
+        if any((arr[:, a, b] != MISSING).any() for a, b in ((i0, j0), (i0, j1), (i1, j0), (i1, j1))):
+            return None
+        reach = max(1, math.ceil(max_km / (111.2 * g.dlat)))
+        rows = np.arange(max(0, i0 - reach), min(g.nlat, i1 + reach + 1))
+        cols = np.arange(j0 - reach, j1 + reach + 1)
+        cols = cols % g.nlon if g.wraps else cols[(cols >= 0) & (cols < g.nlon)]
+        has = (arr[:, rows[:, None], cols[None, :]] != MISSING).any(axis=0)
+        if not has.any():
+            return None
+        plat = g.lat0 - rows[:, None] * g.dlat
+        plon = g.lon0 + cols[None, :] * g.dlon
+        dist = haversine_km(lat, lon, plat, plon)
+        dist = np.where(has, dist, np.inf)
+        a, b = np.unravel_index(np.argmin(dist), dist.shape)
+        if not np.isfinite(dist[a, b]) or dist[a, b] > max_km:
+            return None
+        glat, glon = g.latlon_of(int(rows[a]), int(cols[b]))
+        return glat, glon, round(float(dist[a, b]), 1)
 
     def point_static(self, name: str, lat: float, lon: float) -> float | None:
         field = self.static(name)

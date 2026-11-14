@@ -54,7 +54,10 @@ INSTRUCTIONS = (
     "location: pass the place name the user gave (add the region or country if they did, e.g. "
     "'Paris, Texas') or decimal 'latitude, longitude'. Each result starts with the place it used and "
     "any other places with the same name; if that isn't the place the user meant, ask or retry with "
-    "the region or country. find_place lists places that match a name. Times are local to the "
+    "the region or country. find_place lists places that match a name. At sea and on coasts the "
+    "forecasts also give sea state from NOAA's GFS-Wave model: get_hourly_forecast takes wave_height, "
+    "wave_period, wave_dir, swell_height, swell_period, swell_dir and wind_wave_height. For a sea "
+    "area, give a point in it (coordinates) or a port. Times are local to the "
     "location. Values are model estimates for a grid cell, not observations: local effects "
     "(mountains, coasts, thunderstorms) can differ, and reliability falls after about 5 days. "
     "Data: NOAA GFS (public domain), processed by 4Shadow (Similie); place names from GeoNames."
@@ -68,7 +71,9 @@ SHORT_LABELS = {
     "t2m": "Temp", "d2m": "Dew pt", "rh2m": "RH", "q2m": "Spec hum", "u10": "U wind", "v10": "V wind",
     "wind_speed": "Wind", "wind_dir": "Dir", "gust": "Gust", "mslp": "MSLP", "sp": "Sfc pres",
     "precip": "Rain", "tcc": "Cloud", "cape": "CAPE", "pwat": "Precip water", "vis": "Visibility",
-    "dswrf": "Solar", "snod": "Snow depth",
+    "dswrf": "Solar", "snod": "Snow depth", "wave_height": "Waves", "wave_period": "Wave period",
+    "wave_dir": "Wave dir", "wind_wave_height": "Wind waves", "swell_height": "Swell",
+    "swell_period": "Swell period", "swell_dir": "Swell dir",
 }
 _COMPASS = "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
 SOURCE_LINE = "Source: NOAA GFS (public domain), processed by 4Shadow (Similie), https://4shadow.io"
@@ -161,6 +166,34 @@ def _sources(where: Resolved) -> list[str]:
     return [SOURCE_LINE] + ([PLACES_ATTRIBUTION] if named else [])
 
 
+def _sea_note(loc: dict) -> str:
+    sea = loc.get("sea_point")
+    if sea:
+        return (f"Sea state is for the nearest open-sea grid point, {sea['lat']:.2f}, {sea['lon']:.2f} "
+                f"({sea['distance_km']:.0f} km away); sheltered water near the shore is calmer.")
+    return "Sea state comes from GFS-Wave (open sea, about 25 km cells); it is empty over land."
+
+
+def _sea_now(cur: dict, loc: dict) -> list[str]:
+    """Wave and swell phrases for the Now line, when the point has sea state."""
+    out = []
+    for vid, label in (("wave_height", "waves"), ("swell_height", "swell")):
+        h = cur.get(vid)
+        if h is None or (vid == "swell_height" and h < 0.1):  # 0: no separate swell
+            continue
+        stem = vid.split("_")[0]
+        text = f"{label} {h:.1f} m"
+        if cur.get(f"{stem}_dir") is not None:
+            text += f" from {compass(cur[f'{stem}_dir'])}"
+        if cur.get(f"{stem}_period") is not None:
+            text += f" every {cur[f'{stem}_period']:.0f} s"
+        out.append(text)
+    sea = loc.get("sea_point")
+    if out and sea:
+        out[-1] += f" (open sea {sea['distance_km']:.0f} km away)"
+    return out
+
+
 def _tool_error(exc: ForecastError) -> ToolError:
     if exc.status == 503:
         return ToolError("No forecast data is available yet. Try again in about 10 minutes.")
@@ -195,7 +228,7 @@ def build_server(stores: dict[str, RunStore], places: PlaceIndex | None = None) 
         description=(
             "Current weather and a day-by-day forecast (up to 16 days) for any place or point on Earth: "
             "minimum and maximum temperature, rain total, wind, gusts, humidity, cloud cover and solar "
-            "energy per local day. Takes a place name or coordinates."
+            "energy per local day, plus wave height at sea and on coasts. Takes a place name or coordinates."
         ),
         annotations=READ_ONLY,
         structured_output=False,
@@ -235,6 +268,7 @@ def build_server(stores: dict[str, RunStore], places: PlaceIndex | None = None) 
                                ("mslp", "sea-level pressure")):
                 if cur.get(vid) is not None:
                     parts.append(now_value(vid, label))
+            parts += _sea_now(cur, body["location"])
             local = _parse_iso(cur["time"]).astimezone(zone)
             lines += ["", f"### Now ({local:%a %d %b %H:%M} local)", "; ".join(parts) + "."]
 
@@ -246,7 +280,8 @@ def build_server(stores: dict[str, RunStore], places: PlaceIndex | None = None) 
                 ("precip_sum", f"Rain {du.get('precip_sum', '')}"), ("wind_speed_max", f"Wind max {du.get('wind_speed_max', '')}"),
                 ("gust_max", f"Gust max {du.get('gust_max', '')}"), ("rh2m_mean", f"RH {du.get('rh2m_mean', '')}"),
                 ("tcc_mean", f"Cloud {du.get('tcc_mean', '')}"), ("dswrf_sum", f"Solar {du.get('dswrf_sum', '')}"),
-            ) if k in daily]
+                ("wave_height_max", f"Waves max {du.get('wave_height_max', '')}"),
+            ) if k in daily and any(v is not None for v in daily[k][:days])]
             lines += ["", "### Daily (local days)", "| Date | " + " | ".join(h.strip() for _, h in cols) + " |",
                       "|---" * (len(cols) + 1) + "|"]
             partial, decimals = False, {"rh2m_mean": 0, "tcc_mean": 0}
@@ -308,7 +343,8 @@ def build_server(stores: dict[str, RunStore], places: PlaceIndex | None = None) 
             var = cat.variables[vid]
             per_hour = var.interval and var.units.endswith("/h")
             unit = var.units[:-2] if per_hour else var.units
-            headers.append(SHORT_LABELS.get(vid, vid) + ("" if vid == "wind_dir" else f" {unit}"))
+            direction = var.units == "°"
+            headers.append(SHORT_LABELS.get(vid, vid) + ("" if direction else f" {unit}"))
             values = ts[vid]
             for k, n in enumerate(rows):
                 if var.interval:
@@ -316,7 +352,7 @@ def build_server(stores: dict[str, RunStore], places: PlaceIndex | None = None) 
                     v = _interval_total(values, dt, lo, n, per_hour)
                 else:
                     v = values[n]
-                if vid == "wind_dir":
+                if direction:
                     cells[k].append("–" if v is None else f"{compass(v)} {v:.0f}°")
                 else:
                     cells[k].append(_fmt(v, var.decimals))
@@ -329,6 +365,8 @@ def build_server(stores: dict[str, RunStore], places: PlaceIndex | None = None) 
             notes.append("Rain and solar values cover the period since the previous row (rain as a total, solar as a mean).")
         if every > 1:
             notes.append(f"Rows every {every} hours after the first.")
+        if any(cat.variables[v].marine for v in ids):
+            notes.append(_sea_note(body["location"]))
         lines += [""] + notes + ["Model estimates for the grid cell, not observations.", *_sources(where)]
         return "\n".join(lines)
 

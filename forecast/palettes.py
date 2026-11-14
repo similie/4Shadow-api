@@ -136,3 +136,20 @@ SNOW_DEPTH_M = Palette(
     ((0.01, "#dbe9f6aa"), (0.1, "#a6cbe8"), (0.3, "#6fa6d6"), (1, "#4a6fbf"), (3, "#6a4fb0"), (10, "#e6e0f5")),
     transparent_below=0.01,
 )
+
+# Sea state. Heights follow the steps sailors use (calm < 0.5 m, moderate 1.25-2.5 m, rough
+# 2.5-4 m, very rough 4-6 m, high 6-9 m); land and sea ice are missing, so transparent.
+WAVE_HEIGHT_M = Palette(
+    (
+        (0, "#1d3f7a"), (0.5, "#2a6db5"), (1, "#3a97c9"), (1.5, "#3fbfa8"), (2, "#68cc6a"),
+        (3, "#d6d94a"), (4, "#f2a33a"), (5, "#e8622c"), (7, "#c42a4a"), (9, "#8e1f7a"),
+        (12, "#5a2a8a"), (15, "#e6d9f2"),
+    )
+)
+
+WAVE_PERIOD_S = Palette(
+    (
+        (0, "#2b1d4f"), (4, "#3a4fa8"), (6, "#2f86c4"), (8, "#3fb0a8"), (10, "#7ccc6a"),
+        (12, "#d9d94a"), (14, "#f2a33a"), (16, "#e0562c"), (18, "#b3245a"), (22, "#6a1f6b"),
+    )
+)
