@@ -8,6 +8,11 @@ Series semantics:
   * ``accum`` / ``average`` GRIB fields are converted at ingest into the mean *rate* over the
     interval ending at the step (e.g. precipitation in mm/h), so 1-hourly and 3-hourly steps
     are directly comparable and daily totals are sum(rate x interval hours).
+
+A variable's ``product`` names the GRIB file family it comes from: ``atmos`` (the GFS
+pgrb2.0p25 files) or ``wave`` (GFS-Wave, WAVEWATCH III, on the same 0.25° grid and steps).
+``marine`` variables exist only over open sea (land and sea ice are missing); ``circular``
+ones are directions in degrees and are interpolated as angles.
 """
 
 from __future__ import annotations
@@ -37,6 +42,12 @@ class Variable:
     decimals: int = 1
     palette: Palette | None = None
     derived_from: tuple[str, ...] = ()  # non-empty => computed at read time from these
+    product: str = "atmos"  # GRIB file family: atmos | wave
+    circular: bool = False  # a direction in degrees (0-360): interpolate as an angle
+    marine: bool = False  # defined over open sea only
+    # Wave partitions (wind sea, swell) are missing where the model finds no such waves. Where
+    # this is missing but the named variable (an earlier catalog entry) has data, store 0.
+    zero_within: str | None = None
 
     @property
     def stored(self) -> bool:
@@ -58,6 +69,8 @@ class Variable:
         }
         if self.derived_from:
             out["derived_from"] = list(self.derived_from)
+        if self.marine:
+            out["marine"] = True
         if self.palette is not None:
             out["legend"] = self.palette.legend()
         return out
@@ -101,6 +114,11 @@ class ModelCatalog:
 
     def stored_variables(self) -> list[Variable]:
         return [v for v in self.variables.values() if v.stored]
+
+    def products(self) -> list[str]:
+        """GRIB file families the stored variables come from, the primary (atmos) first."""
+        found = {v.product for v in self.stored_variables()}
+        return sorted(found, key=lambda p: (p != "atmos", p))
 
     def get(self, var_id: str) -> Variable | None:
         return self.variables.get(var_id)
@@ -178,6 +196,34 @@ GFS = ModelCatalog(
         Variable("snod", "Snow depth", "m", "Snow depth on the ground.",
                  grib_param="SNOD", grib_level="surface", clip=(0, None), decimals=2,
                  palette=palettes.SNOW_DEPTH_M),
+        # Sea state, from GFS-Wave. Directions are where the waves come FROM, like wind.
+        Variable("wave_height", "Significant wave height", "m",
+                 "Significant height of wind waves and swell combined: about the mean height of the "
+                 "highest third of the waves. Individual waves can reach about twice this. Open sea only.",
+                 grib_param="HTSGW", grib_level="surface", clip=(0, None), product="wave", marine=True,
+                 palette=palettes.WAVE_HEIGHT_M),
+        Variable("wave_period", "Wave period", "s", "Period of the dominant waves. Open sea only.",
+                 grib_param="PERPW", grib_level="surface", clip=(0, None), product="wave", marine=True,
+                 palette=palettes.WAVE_PERIOD_S),
+        Variable("wave_dir", "Wave direction", "°",
+                 "Direction the dominant waves come from, clockwise from north. Open sea only.",
+                 grib_param="DIRPW", grib_level="surface", scale=0.1, decimals=0, product="wave",
+                 circular=True, marine=True),
+        Variable("wind_wave_height", "Wind-wave height", "m",
+                 "Significant height of the waves raised by the local wind (the wind sea); 0 when there is none. Open sea only.",
+                 grib_param="WVHGT", grib_level="surface", clip=(0, None), product="wave", marine=True,
+                 zero_within="wave_height", palette=palettes.WAVE_HEIGHT_M),
+        Variable("swell_height", "Swell height", "m",
+                 "Significant height of the main swell: waves raised by distant winds; 0 when there is none. Open sea only.",
+                 grib_param="SWELL", grib_level="1 in sequence", clip=(0, None), product="wave", marine=True,
+                 zero_within="wave_height", palette=palettes.WAVE_HEIGHT_M),
+        Variable("swell_period", "Swell period", "s", "Period of the main swell; empty when there is no swell. Open sea only.",
+                 grib_param="SWPER", grib_level="1 in sequence", clip=(0, None), product="wave", marine=True,
+                 palette=palettes.WAVE_PERIOD_S),
+        Variable("swell_dir", "Swell direction", "°",
+                 "Direction the main swell comes from, clockwise from north; empty when there is no swell. Open sea only.",
+                 grib_param="SWDIR", grib_level="1 in sequence", scale=0.1, decimals=0, product="wave",
+                 circular=True, marine=True),
     ),
     static={
         "orog": StaticField("orog", "Model surface elevation", "m", "HGT", "surface"),
@@ -192,6 +238,7 @@ GFS = ModelCatalog(
         DailySpec("rh2m_mean", "rh2m", "mean", "%", decimals=0),
         DailySpec("tcc_mean", "tcc", "mean", "%", decimals=0),
         DailySpec("dswrf_sum", "dswrf", "sum", "MJ/m²", factor=0.0036, decimals=1),
+        DailySpec("wave_height_max", "wave_height", "max", "m"),
     ),
 )
 

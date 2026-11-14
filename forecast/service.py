@@ -106,7 +106,15 @@ def point_forecast(
         v = cat.get(vid)
         if v is not None:
             needed.update(d for d in (v.derived_from or (v.id,)) if d in r.variables)
-    base = r.point_series(sorted(needed), lat, lon)
+    circular = {v.id for v in cat.variables.values() if v.circular}
+    marine = sorted(vid for vid in needed if (v := cat.get(vid)) is not None and v.marine)
+    base = r.point_series(sorted(needed - set(marine)), lat, lon, circular)
+    sea = None
+    if marine:
+        # Sea-state on a coast: the model's coastline cells are land, so use the nearest sea cell.
+        sea = r.sea_point(marine[0], lat, lon)
+        base.update(r.point_series(marine, sea[0], sea[1], circular) if sea else
+                    r.point_series(marine, lat, lon, circular))
 
     def with_derived(values: dict[str, np.ndarray], var_list) -> dict[str, np.ndarray]:
         out = dict(values)
@@ -135,7 +143,12 @@ def point_forecast(
         cur_base = {}
         for vid, s in base.items():
             var = cat.get(vid)
-            cur_base[vid] = s[k] if (var is not None and var.interval) else s[k - 1] * (1 - frac) + s[k] * frac
+            if var is not None and var.interval:
+                cur_base[vid] = s[k]
+            elif vid in circular:  # the short way round: 350° -> 10° passes 0°, not 180°
+                cur_base[vid] = np.mod(s[k - 1] + (np.mod(s[k] - s[k - 1] + 180.0, 360.0) - 180.0) * frac, 360.0)
+            else:
+                cur_base[vid] = s[k - 1] * (1 - frac) + s[k] * frac
         cur = with_derived({k_: np.asarray([v]) for k_, v in cur_base.items()}, wanted)
         current = {"time": iso(now.replace(second=0, microsecond=0))}
         for v in wanted:
@@ -172,5 +185,7 @@ def point_forecast(
             agg = {key: [vals[n] for n in keep] for key, vals in agg.items()}
         body["daily"] = agg
         body["daily_units"] = {d.id: d.units for d in cat.daily if d.id in agg}
+    if sea is not None:
+        body["location"]["sea_point"] = {"lat": sea[0], "lon": sea[1], "distance_km": sea[2]}
     body["source"] = r.manifest.get("source", {})
     return r, body

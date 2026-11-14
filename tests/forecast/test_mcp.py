@@ -193,3 +193,19 @@ def test_only_post_and_not_in_openapi(mcp):
 
 def test_compass():
     assert [compass(d) for d in (0, 11, 12, 90, 217, 348.75, 359)] == ["N", "N", "NNE", "E", "SW", "N", "N"]
+
+
+def test_sea_state_at_sea_only(mcp):
+    sea, err = call(mcp, "get_forecast", location="10, 120", days=2)
+    assert not err
+    now = sea.split("### Now")[1].split("###")[0]
+    assert "waves 2.0 m from N" in now and "every 9 s" in now and "swell 2.0 m" in now
+    assert "Waves max m" in table(sea.split("### Daily")[1])[0]
+
+    land, _ = call(mcp, "get_forecast", location="10, -110", days=2)  # 250°E: "land" in the test data
+    assert "waves" not in land and "Waves max" not in land
+
+    hourly, _ = call(mcp, "get_hourly_forecast", location="10, 120", hours=3, variables="wave_height,wave_dir,swell_period")
+    rows = table(hourly)
+    assert rows[0] == ["Local time", "Waves m", "Wave dir", "Swell period s"]
+    assert rows[1][2].endswith("°") and "GFS-Wave" in hourly

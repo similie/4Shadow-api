@@ -79,38 +79,56 @@ class IntervalState:
 # --------------------------------------------------------------------------- download
 
 
-def download_step(client: GfsClient, catalog: ModelCatalog, run: datetime, fhr: int,
-                  include_static: bool, wait_seconds: int = 0) -> StepPayload:
-    deadline = time.monotonic() + wait_seconds
+def _wait_for_idx(client: GfsClient, run: datetime, fhr: int, product: str,
+                  deadline: float) -> list[IdxRecord] | None:
     while True:
-        records = client.idx(run, fhr)
-        if records is not None:
-            break
-        if time.monotonic() >= deadline:
-            raise StepUnavailable(f"{run_id(run)} f{fhr:03d}: index not published")
+        records = client.idx(run, fhr, product)
+        if records is not None or time.monotonic() >= deadline:
+            return records
         time.sleep(30)
 
-    wanted: dict[str, tuple[IdxRecord, FcstSpec]] = {}
-    for var in catalog.stored_variables():
-        hit = gfs.select_record(records, var.grib_param, var.grib_level, var.kind, fhr)
-        if hit is None:
-            if not (fhr == 0 and var.kind != "instant"):
-                log.warning("%s f%03d: no %s:%s message", run_id(run), fhr, var.grib_param, var.grib_level)
-            continue
-        wanted[var.id] = hit
-    static_wanted: dict[str, IdxRecord] = {}
-    if include_static:
-        for sf in catalog.static.values():
-            hit = gfs.select_record(records, sf.grib_param, sf.grib_level, "instant", fhr)
-            if hit is not None:
-                static_wanted[sf.id] = hit[0]
 
-    blobs = client.fetch_records(run, fhr, [r for r, _ in wanted.values()] + list(static_wanted.values()))
-    return StepPayload(
-        fhr=fhr,
-        messages={vid: (spec, blobs[rec.num]) for vid, (rec, spec) in wanted.items()},
-        static={sid: blobs[rec.num] for sid, rec in static_wanted.items()},
-    )
+def download_step(client: GfsClient, catalog: ModelCatalog, run: datetime, fhr: int,
+                  include_static: bool, wait_seconds: int = 0) -> StepPayload:
+    """Fetch one step's messages from each product's file.
+
+    The primary product (atmos) must exist. Others (wave) are optional: if one isn't published
+    by the deadline, its variables are left missing for this step rather than holding up the run.
+    """
+    deadline = time.monotonic() + wait_seconds
+    payload = StepPayload(fhr=fhr)
+    for n, product in enumerate(catalog.products()):
+        records = _wait_for_idx(client, run, fhr, product, deadline)
+        if records is None:
+            if n == 0:
+                raise StepUnavailable(f"{run_id(run)} f{fhr:03d}: index not published")
+            log.warning("%s f%03d: no %s index; its variables are missing for this step", run_id(run), fhr, product)
+            continue
+
+        wanted: dict[str, tuple[IdxRecord, FcstSpec]] = {}
+        for var in catalog.stored_variables():
+            if var.product != product:
+                continue
+            hit = gfs.select_record(records, var.grib_param, var.grib_level, var.kind, fhr)
+            if hit is None:
+                if not (fhr == 0 and var.kind != "instant"):
+                    log.warning("%s f%03d: no %s:%s message", run_id(run), fhr, var.grib_param, var.grib_level)
+                continue
+            wanted[var.id] = hit
+        static_wanted: dict[str, IdxRecord] = {}
+        if include_static and n == 0:
+            for sf in catalog.static.values():
+                hit = gfs.select_record(records, sf.grib_param, sf.grib_level, "instant", fhr)
+                if hit is not None:
+                    static_wanted[sf.id] = hit[0]
+
+        recs = [r for r, _ in wanted.values()] + list(static_wanted.values())
+        if not recs:
+            continue
+        blobs = client.fetch_records(run, fhr, recs, product)  # keyed by message number, per file
+        payload.messages.update({vid: (spec, blobs[rec.num]) for vid, (rec, spec) in wanted.items()})
+        payload.static.update({sid: blobs[rec.num] for sid, rec in static_wanted.items()})
+    return payload
 
 
 # --------------------------------------------------------------------------- processing
@@ -131,8 +149,15 @@ def _clip(var: Variable, values: np.ndarray) -> np.ndarray:
     return values
 
 
+def zero_where_absent(values: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """0 where ``values`` is missing but ``reference`` has data: a wave partition the model didn't
+    find (no swell) at a sea point, as opposed to land, where both are missing."""
+    return np.where(np.isnan(values) & ~np.isnan(reference), np.float32(0.0), values).astype(np.float32, copy=False)
+
+
 def process_step(writer: RunWriter, catalog: ModelCatalog, step: int, payload: StepPayload,
                  states: dict[str, IntervalState]) -> None:
+    done: dict[str, np.ndarray] = {}
     for var in catalog.stored_variables():
         item = payload.messages.get(var.id)
         if item is None:
@@ -144,7 +169,12 @@ def process_step(writer: RunWriter, catalog: ModelCatalog, step: int, payload: S
             values = states[var.id].accum(payload.fhr, values)
         elif var.kind == "average":
             values = states[var.id].average(payload.fhr, spec, values)
-        writer.write(var.id, step, _clip(var, values))
+        values = _clip(var, values)
+        if var.zero_within and var.zero_within in done:
+            values = zero_where_absent(values, done[var.zero_within])
+        if any(v.zero_within == var.id for v in catalog.stored_variables()):
+            done[var.id] = values
+        writer.write(var.id, step, values)
     for sid, blob in payload.static.items():
         sf = catalog.static[sid]
         writer.write_static(sid, gfs.decode_message(blob, writer.grid), {"name": sf.name, "units": sf.units})
@@ -157,7 +187,7 @@ def ingest_run(run: datetime, settings: Settings, client: GfsClient | None = Non
     model_root = settings.data_root / catalog.model
     stored = catalog.stored_variables()
     writer = RunWriter(model_root, catalog.model, run, gfs.GRID, hours, stored,
-                       source=gfs.source_info(client.base_url, run))
+                       source=gfs.source_info(client.base_url, run, catalog.products()))
     states = {v.id: IntervalState(gfs.GRID.shape) for v in stored if v.interval}
     log.info("Ingesting %s run %s: %d steps x %d variables", catalog.model, writer.id, len(hours), len(stored))
 

@@ -1,7 +1,8 @@
 # Foreshadow Forecast v2
 
 A forecast for any point on Earth, plus map tiles, from open numerical weather prediction
-data. Today the source is NOAA GFS 0.25°; the store and API are model-agnostic.
+data. Today the source is NOAA GFS 0.25°, with sea state from GFS-Wave; the store and API are
+model-agnostic.
 
 ```
 NOAA S3 (.idx + byte ranges) ──► ingest ──► data/forecast/gfs/runs/<run>/*.npy ──► API (/v2)
@@ -67,6 +68,15 @@ Semantics worth knowing:
   the model's terrain height there, useful for elevation corrections.
 - With `q`, `location` adds `query`, `place` (the match) and `alternatives` (other places with the
   same name). With `lat`/`lon` it adds `nearest_place` (the closest town or village within 50 km).
+- **Sea state** (`wave_height`, `wave_period`, `wave_dir`, `wind_wave_height`, `swell_height`,
+  `swell_period`, `swell_dir`, daily `wave_height_max`) comes from GFS-Wave (WAVEWATCH III) on the
+  same grid and steps, and exists over open sea only: `null` over land, and over the Black and
+  Caspian Seas, which the global wave grid leaves out. On a coast whose grid cells are all land
+  for the wave model, it comes from the nearest sea cell within 50 km, given as `location.sea_point`
+  (`lat`, `lon`, `distance_km`); sheltered water there is usually calmer. Directions are where the
+  waves come from, clockwise from north, and are interpolated as angles. `wind_wave_height` and
+  `swell_height` are 0 at sea when the model finds no wind sea or swell (their period and
+  direction are then `null`).
 
 **Fields** are the numbers behind the tiles, for clients that render, animate or analyse the data
 themselves (WebGL colour layers, wind particles, isobars). `vars` takes up to 4 stored variables
@@ -115,7 +125,7 @@ server-to-client stream and no session).
 
 | Tool | Returns |
 |---|---|
-| `get_forecast(location, days=7, timezone="")` | Current conditions and a daily table (min/max temperature, rain, wind, gusts, humidity, cloud, solar) |
+| `get_forecast(location, days=7, timezone="")` | Current conditions and a daily table (min/max temperature, rain, wind, gusts, humidity, cloud, solar; at sea, waves and swell now and the daily highest waves) |
 | `get_hourly_forecast(location, hours=24, variables="", timezone="")` | A time-step table: hourly to 48 h, then 3-hourly to 7 days, then 6-hourly. Rain is the total since the previous row |
 | `find_place(query, limit=5)` | Places matching a name (or nearest to coordinates), with region, country, kind, population |
 | `list_variables()` | Variable ids, units and meaning |
@@ -144,14 +154,18 @@ int16 `[step, lat, lon]` with `value = raw * scale + offset` (`-32768` = missing
 `manifest.json` describing the grid, steps, valid times, units and scale/offset. Anything
 can read it: `np.load("t2m.npy", mmap_mode="r")`. Runs are written to `<run>.incoming/`
 and renamed into place, then `latest.json` is replaced atomically, so readers never see a
-partial run. The newest `FORECAST_KEEP_RUNS` runs are kept (default 2, about 6 GB each for GFS).
+partial run. The newest `FORECAST_KEEP_RUNS` runs are kept (default 2, about 9.5 GB each for GFS
+with sea state).
 
 ## Adding a variable
 
 Add a `Variable` to `forecast/catalog.py` with the GRIB abbreviation and level text exactly
 as they appear in the NOAA `.idx` files (e.g. `TMP` / `2 m above ground`), its `kind`
 (`instant`, `accum` for running totals, `average` for bucket means), unit conversion,
-storage quantum and an optional palette. The next ingested run includes it.
+storage quantum and an optional palette. The next ingested run includes it. Set `product="wave"`
+for a GFS-Wave field (`gfswave.tCCz.global.0p25.fFFF.grib2`); a missing wave file leaves its
+variables empty for that step instead of failing the run. Wave files are JPEG 2000 packed, so
+they decode at about 0.14 s per field (about 3 minutes per full run for the seven wave fields).
 
 ## Configuration
 
@@ -174,6 +188,6 @@ JSON file and the router rows once no client calls `/v1`.
 
 ## Data attribution
 
-GFS data: NOAA/NCEP, public domain, distributed through the NOAA Open Data Dissemination
-program on AWS (`noaa-gfs-bdp-pds`). Place names: GeoNames (geonames.org), licensed under
+GFS and GFS-Wave data: NOAA/NCEP, public domain, distributed through the NOAA Open Data
+Dissemination program on AWS (`noaa-gfs-bdp-pds`). Place names: GeoNames (geonames.org), licensed under
 CC BY 4.0; responses that use them say so.
