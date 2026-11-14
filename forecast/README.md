@@ -36,6 +36,7 @@ which pins an older numpy for GDAL.
 | `GET /v2/{model}/fields/{run}/{time}?vars=u10,v10` | Raw gridded values (binary) for client-side rendering |
 | `GET /v2/{model}/variables` | Variable catalog with units and legend colour stops |
 | `GET /v2/{model}/runs`, `/v2/{model}/runs/{run}` | Available runs and their valid times |
+| `POST /v2/{model}/thresholds` | Early-warning check: when an area meets conditions in a run (internal; see below) |
 | `GET /v2/health` | Latest run per model and its age (503 if none) |
 | `POST /v2/mcp` | MCP server for AI assistants (see below) |
 
@@ -87,6 +88,38 @@ JSON header (grid, valid time, per-variable units/scale/offset), then one int16 
 variable, rows north to south, starting on an 8-byte boundary. `value = raw * scale + offset`,
 `-32768` = missing. A global 0.5° wind field (u10 + v10) is about 1 MB; `forecast.fields.decode_field`
 reads it in Python, and the JS SDK in the browser.
+
+## Thresholds (early warnings)
+
+`forecast/thresholds.py` answers one question, statelessly: *in this run, when does this area meet
+these conditions?* The 4Shadow site stores users' alerts, calls it for each new run, turns the answers
+into events and sends the webhooks (`foreshadow-site/src/lib/server/alerts`). It isn't on the public
+router; users reach early warnings through the site's `/v2/alerts` API.
+
+```jsonc
+// POST /v2/gfs/thresholds
+{
+  "area": {"type": "Polygon", "coordinates": [[[124, -9.5], [127.3, -9.5], [127.3, -8.1], [124, -8.1], [124, -9.5]]]},
+  "conditions": [{"variable": "precip", "operator": ">=", "threshold": 50, "accumulate_hours": 24}],
+  "match": "all",            // all: every condition in the same cell at once; any: one is enough
+  "area_mode": "coverage",   // any (max/min over the cells) | mean | coverage (share of cells)
+  "coverage_percent": 25,
+  "lead_days": 3, "min_duration_hours": 0,
+  "run": "latest", "at": null, "timeline": false   // `at` overrides "now"; timeline adds per-step values
+}
+```
+
+- Areas: a `Point` is bilinear (with the `sea_point` fallback for sea variables); with `radius_km` it
+  is every cell within the radius. Polygons take the cells whose centres fall inside (even-odd, holes
+  and the antimeridian handled), or the nearest cell if the polygon is smaller than a cell. Up to
+  20,000 cells and 10,000 vertices.
+- `accumulate_hours` turns an hourly rate (`precip`) into a running total over that many hours.
+  Directions can't be thresholds.
+- Events are runs of steps that meet the conditions between the step in effect `at` and
+  `at + lead_days`. Gaps of up to 6 h are merged, and events shorter than `min_duration_hours` are
+  dropped. Each event has its peak (value, time, place, coverage) and each condition's peak.
+- `warnings` explain partial answers: totals that start at the run's start, a variable with no data
+  in the area, or a run that ends before the window does.
 
 ## Places
 
