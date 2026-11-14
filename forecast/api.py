@@ -25,6 +25,7 @@ from .places import PlaceIndex
 from .render import render_tile
 from .service import ForecastError, get_catalog, get_run, point_forecast, step_for
 from .store import RunStore, iso, parse_run_id
+from .thresholds import ThresholdRequest, check_thresholds
 
 MAX_TILE_ZOOM = 12
 STALE_AFTER_HOURS = 12
@@ -53,7 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         lifespan=lifespan,
     )
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
 
     @app.exception_handler(ForecastError)
     async def forecast_error(_request, exc: ForecastError):
@@ -86,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "variables": "/v2/{model}/variables",
                 "tiles": "/v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png",
                 "fields": "/v2/{model}/fields/{run}/{time}?vars=u10,v10&stride=4",
+                "thresholds": "POST /v2/{model}/thresholds",
             },
         }
 
@@ -240,6 +242,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cache = IMMUTABLE if run != "latest" else f"public, max-age={LATEST_MAX_AGE}"
         return Response(body, media_type="application/octet-stream",
                         headers={"Cache-Control": cache, "X-Forecast-Run": r.id})
+
+    @app.post("/v2/{model}/thresholds", tags=["alerts"])
+    def thresholds(model: str, body: ThresholdRequest):
+        """When and where the forecast crosses thresholds in an area, within a lead time: the check
+        behind early warnings. Give an area (a point, a point and radius, or a polygon), up to five
+        conditions such as `precip >= 50` with `accumulate_hours: 24`, and how many days ahead to look.
+        Returns each period that meets them (consecutive steps, breaks under 6 h merged) with its
+        peak value, time and place. Stateless: storing alerts and sending webhooks is up to the caller."""
+        cat = get_catalog(model)
+        r = get_run(stores, model, body.run)
+        return JSONResponse(check_thresholds(r, cat, body), headers={"Cache-Control": "no-store", "X-Forecast-Run": r.id})
 
     # v1 response shapes for clients still on the retired v1 service (see legacy_v1.py).
     app.include_router(legacy_v1.build_router(stores, tile_bytes))
