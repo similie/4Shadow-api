@@ -31,11 +31,11 @@ pytest                                     # tests (pip install -r requirements-
 ## Checks
 
 ```bash
-ruff check forecast tests      # lint (CI runs it)
+ruff check .                   # lint (CI runs it; rules in ruff.toml)
 pytest                         # tests; no network or data needed
 ```
 
-CI (`.github/workflows/ci.yml`) runs both on Python 3.12 and 3.13, builds the Docker image, and checks that it starts. pygrib has no Python 3.14 build yet.
+CI (`.github/workflows/ci.yml`) runs both (tests on Python 3.12, 3.13 and 3.14), builds the Docker image and checks that it starts. On `main`, daily and by hand, an end-to-end job ingests hours 0-6 of the newest real GFS run and runs `deploy/deploy.sh check` against it. Production runs Python 3.12.
 
 ## Deploying
 

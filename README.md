@@ -1,105 +1,172 @@
-# 4Shadow API
+<p align="center">
+  <a href="https://4shadow.io">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/wordmark-dark.svg" />
+      <img src="docs/images/wordmark-light.svg" alt="4Shadow" height="52" />
+    </picture>
+  </a>
+</p>
 
-4Shadow API provides efficient, real-time access to Global Forecast System (GFS) data, optimized for point-based forecasts and map visualizations. Leveraging FastAPI, it offers streamlined, performant endpoints tailored for applications requiring precise weather forecasting data.
+<h3 align="center">An open weather forecast API for any point on Earth</h3>
 
-## Available API Routes
+<p align="center">
+  Point forecasts, map tiles, raw gridded fields, place search, early-warning checks and an MCP server for AI assistants,<br />
+  16 days ahead, from NOAA's open GFS and GFS-Wave data. The engine behind <a href="https://4shadow.io">4Shadow</a>.
+</p>
 
-### Base Route
-- **GET /**
-  Provides a simple status message describing the API's functionality, caching strategies, and data processing capabilities.
+<p align="center">
+  <a href="https://github.com/similie/4Shadow-api/actions/workflows/ci.yml"><img src="https://github.com/similie/4Shadow-api/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-3B9DD6" alt="GPL-3.0 license" /></a>
+  <img src="https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-3776AB?logo=python&logoColor=white" alt="Python 3.12, 3.13 and 3.14" />
+  <a href="docs/deploy.md"><img src="https://img.shields.io/badge/self--host-Docker%20%7C%20systemd-2496ED?logo=docker&logoColor=white" alt="Self-host with Docker or systemd" /></a>
+</p>
 
-### Tile Rendering
-- **GET /tiles/{model}/{param_key}/{hour_offset}/{z}/{x}/{y}.png**
-  Fetches pre-rendered tile images based on weather data parameters.
-  - **Parameters:**
-    - `model`: The weather forecast model (e.g., GFS).
-    - `param_key`: Specific parameter to visualize (e.g., temperature).
-    - `hour_offset`: Forecast hour offset from the latest data run.
-    - `z`, `x`, `y`: Tile coordinates for map rendering.
+<p align="center">
+  <a href="https://4shadow.io/signup"><b>Get a free API key</b></a> ·
+  <a href="https://4shadow.io/docs">API docs</a> ·
+  <a href="https://4shadow.io/map">Live map</a> ·
+  <a href="https://github.com/similie/4Shadow-js">JS SDK and map</a> ·
+  <a href="docs/deploy.md">Run your own</a>
+</p>
 
-### Parameter Listings
-- **GET /list_parameters/{model}/{hour_offset}**
-  Returns a list of available parameters for a specified model and hour offset.
-
-- **GET /parameters**
-  Provides detailed definitions and metadata for available weather forecast models.
-
-### Point Forecasts
-- **POST /point** or **POST /point/{hour_offset}**
-  Fetches weather data for specific geographic coordinates.
-  - **Request Body:** JSON containing `model`, `param_keys`, `lat`, `lon`, and optional parameters (`start_hour_offset`, `level`, `typeOfLevel`, `stepType`).
-
-### Streaming Forecast
-- **POST /forecast-stream**
-  Initiates a streaming connection providing incremental updates of forecast computation progress, useful for long-running data processes.
-  - **Request Body:** Same JSON structure as `/forecast`.
-  - **Response:** Streams JSON progress messages and final forecast data.
-
-### Forecast Data
-- **POST /forecast**
-  Retrieves full timeseries forecast data based on provided parameters.
-  - **Request Body:** JSON with details such as `model`, `param_keys`, `lat`, `lon`, and additional optional fields.
-
-## Key Features
-- **Efficient Caching:** Uses Redis-backed caching to significantly enhance performance and reduce latency.
-- **Concurrent Processing:** Utilizes thread pools for optimized CPU utilization.
-- **Dynamic Handling:** Robust handling for missing values and coordinate transformations ensuring accurate forecasts.
-
-## Running the API
-To launch the API server:
-
-## GDAL Required
-We have test with [GDAL](https://gdal.org/en/stable/development/building_from_source.html) version [3.10.2](https://gdal.org/en/stable/download_past.html#download-past)
-
-### Requirements
-- libeigen3-dev
-- libboost-all-dev
-- libpq-dev
-- build-essential
-- cmake
-
-## Memory Requirements
-Ensure sufficient memory is allocated for the API server to handle concurrent requests effectively. To preload the data for radid forecasts, we recommend a server with at least 64GB or RAM and recommend 256GB for medium volume traffic. The dataset is 4 dimensional and requires significant resources to run. In certain deployments, it is recommended that you run `gfs_render/run_preloader.py` which will pre-cache resources into redis so that your application can cycle through it's preload sequence more rapidly.
-
-```bash
-uvicorn main:app --host 0.0.0.0 --port 5001 --workers $(nproc)
-```
-
-Replace `$(nproc)` with the desired number of worker processes.
-
-## Env Variables
-You can set a .env file anywhere in a root directory of your instance and it will recursively find it.
-- `GRIB_FILES_PATH=/root/foreshadow-api/grib # Where are the grib files located. Required`
-- `REDIS_HOST=localhost`
-- `REDIS_PORT=6379`
-- `REDIS_DB=0`
-
-## Dependencies
-- python3.12
-- FastAPI
-- Uvicorn
-- Redis
-- NumPy
-- GDAL
-
-Ensure Redis is installed and running to enable caching.
-
-4Shadow API is designed to deliver high-performance weather forecasts tailored specifically to your application's geographical needs.
-
-## Contributions & Community
-
-Want to help build the future of weather insights? We're open-source and community-driven!
-
-Check out our [CONTRIBUTING.md](./CONTRIBUTING.md) file for guidance on how you can contribute to Parabl 4Shadow and make the world a bit safer, one forecast at a time!
-
-## Contributors
-
-Huge thanks to our awesome contributors for helping Parabl 4Shadow shine! _(Your name could be here—come join us!)_
-
-## About Similie
-
-[**Similie**](https://similie.org) is a tech company from Timor-Leste dedicated to building innovative solutions for international development and climate adaptation. We believe tech should **empower, not overwhelm**, and we're here to make positive impacts worldwide.
+<p align="center">
+  <a href="https://github.com/similie/4Shadow-js"><img src="https://raw.githubusercontent.com/similie/4Shadow-js/main/docs/images/wind.webp" alt="Wind particles over the Indian and Pacific Oceans, drawn from this API's wind fields" width="880" /></a><br />
+  <sub>Wind from this API's raw fields, drawn on the GPU by the open-source <a href="https://github.com/similie/4Shadow-js">4Shadow-js</a> map.</sub>
+</p>
 
 ---
 
-Built with ❤️ by **Similie** in Timor-Leste
+## What it does
+
+- **A forecast for any coordinates or any place name.** Current conditions, an hourly timeline and local-day summaries for 25 variables: temperature, dew point and humidity, wind and gusts, pressure, rain, cloud, solar radiation, CAPE, precipitable water, visibility and snow depth, and at sea wave height, period and direction, wind sea and swell. Hourly to 5 days, then 3-hourly to 16 days.
+- **Place search that never leaves the server.** Names to coordinates and coordinates to the nearest town, in any language GeoNames records, from a local SQLite index of every village on Earth.
+- **Map tiles and raw fields.** XYZ PNG tiles with fixed colour scales, and the numbers behind them as compact int16 grids for WebGL maps, particles and analysis (wind for the whole globe at 0.5° is about 1 MB).
+- **Early-warning checks.** Give an area and conditions ("50 mm of rain in 24 hours over a quarter of this district") and get back when the latest run meets them, with peaks and coverage. The 4Shadow site turns these answers into webhooks and emails.
+- **An MCP server.** AI assistants can ask for forecasts, hourly tables and places through the [Model Context Protocol](https://modelcontextprotocol.io), with compact answers that fit their limits.
+- **Never half-updated.** Each run is downloaded and published as a whole, with one atomic switch, so the API never serves a mix of two runs and never goes blank while the next one arrives.
+- **Light to run.** Only the GRIB messages it uses are downloaded (about 12 MB per step instead of 540 MB), and the API memory-maps a plain NumPy store: no database, no cache to warm, and a restart takes seconds.
+
+## Try it
+
+With a free key from [4shadow.io](https://4shadow.io/signup):
+
+```sh
+curl -H "api-key: $FORESHADOW_API_KEY" \
+  "https://api.4shadow.io/v2/forecast?q=Dili,%20Timor-Leste&hours=24"
+```
+
+```jsonc
+// abbreviated
+{
+  "run": "2026111600",
+  "location": {
+    "lat": -8.55861, "lon": 125.57361, "model_elevation_m": 325.6,
+    "place": { "display_name": "Dili, Timor-Leste", "kind": "capital city", "population": 150000, ... }
+  },
+  "timezone": { "name": "Asia/Dili", "utc_offset_seconds": 32400 },
+  "units": { "t2m": "°C", "precip": "mm/h", "wind_speed": "m/s", "wave_height": "m", ... },
+  "current": { "time": "2026-11-16T05:00Z", "t2m": 31.2, "precip": 0.0, "wind_speed": 3.1, ... },
+  "timeseries": { "time": [...], "interval_hours": [...], "t2m": [...], ... },
+  "daily": { "date": [...], "t2m_min": [...], "t2m_max": [...], "precip_sum": [...], "wave_height_max": [...], ... },
+  "source": { "provider": "NOAA/NCEP Global Forecast System (GFS), 0.25°, with GFS-Wave (WAVEWATCH III) sea state", ... }
+}
+```
+
+From JavaScript or TypeScript, the [`@similie/4shadow`](https://www.npmjs.com/package/@similie/4shadow) SDK wraps every endpoint. For an AI assistant, connect it to `https://api.4shadow.io/v2/mcp` with the header `api-key: <your key>`.
+
+## Run your own
+
+You need Python 3.12 or newer. A short slice of the newest run is enough to try everything:
+
+```sh
+git clone https://github.com/similie/4Shadow-api.git && cd 4Shadow-api
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+
+python -m forecast.ingest --max-fhr 24      # newest GFS run, hours 0-24 (about 300 MB to download)
+python -m forecast.places build             # place index from GeoNames cities500 (about 70 MB, seconds)
+uvicorn forecast.api:app --port 5003        # interactive docs at http://localhost:5003/v2/docs
+
+curl "localhost:5003/v2/forecast?q=Lisbon&hours=48"
+```
+
+Or with Docker, the API and a continuous ingest sharing one volume:
+
+```sh
+docker compose up -d                        # http://localhost:5003/v2/docs
+docker compose logs -f ingest               # the first full run takes a while
+```
+
+For a server that stays current (four runs a day, every step to 16 days), the **[deployment guide](docs/deploy.md)** covers sizing, the systemd units, the update script and a reverse proxy.
+
+## API
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v2/forecast?lat&lon` or `?q=` | Point forecast: `current`, `timeseries` and local-day `daily` |
+| `GET /v2/places?q=` or `?lat&lon` | Place search, or the nearest towns to a point |
+| `GET /v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png` | XYZ map tiles |
+| `GET /v2/{model}/fields/{run}/{time}?vars=u10,v10` | Raw gridded values (binary `4SF1`) for client-side rendering |
+| `GET /v2/{model}/variables` | Variables with units and legend colour stops |
+| `GET /v2/{model}/runs`, `/v2/{model}/runs/{run}` | Available runs and their valid times |
+| `POST /v2/{model}/thresholds` | Early-warning check: when an area meets conditions in a run |
+| `POST /v2/mcp` | MCP server (streamable HTTP, stateless) |
+| `GET /v2/health` | Latest run per model and its age |
+
+The **[forecast service guide](forecast/README.md)** has the details: parameters, how rates and daily sums are computed, sea state near coasts, the field format, threshold requests, the MCP tools, the store format and how to add a variable. For the hosted service, [4shadow.io/docs](https://4shadow.io/docs) lists what each plan includes.
+
+## How it works
+
+```mermaid
+flowchart TB
+  noaa["<b>NOAA open data on AWS</b><br/>GFS + GFS-Wave, 0.25°, 4 runs a day"]
+  ingest["<b>Ingest</b> (forecast.ingest)<br/>byte-range downloads · decode · quantise"]
+  store[("<b>Store</b><br/>one int16 .npy per variable per run<br/>published atomically")]
+  api["<b>API</b> (FastAPI, forecast.api)<br/>memory-mapped reads · bilinear points · tiles"]
+  clients["Apps · maps · AI assistants"]
+  noaa --> ingest --> store --> api --> clients
+```
+
+- **Ingest** reads each step's `.idx` index and fetches only the byte ranges of the GRIB messages it needs. It turns running totals and bucket averages into per-interval rates, quantises each field to int16 and writes the run to `<run>.incoming/`. When every step is in, the folder is renamed into place and `latest.json` is switched.
+- **The store** is plain NumPy: `data/forecast/gfs/runs/<run>/<var>.npy`, `[step, lat, lon]`, with scale and offset in `manifest.json`. Anything can read it with `np.load(..., mmap_mode="r")`. The two newest runs are kept.
+- **The API** is stateless. Each worker memory-maps the store, so workers share one copy through the page cache, and any worker can answer any request.
+- **The hosted service** puts an API-key router in front (keys, plans, quotas, metering) and a site for accounts, billing and alerts. Those parts are not in this repository.
+
+## Repository
+
+| Path | |
+| --- | --- |
+| [`forecast/`](forecast) | The forecast service: ingest, store, API, places, thresholds, MCP. [Guide](forecast/README.md) |
+| [`tests/`](tests) | Tests on a small synthetic store; no network or data needed |
+| [`deploy/`](deploy) | systemd units, log rotation and `deploy.sh`, the update script. [Guide](docs/deploy.md) |
+| [`terrain/`](terrain) | Experimental flood and landslide engine, separate from the API. [README](terrain/README.md) |
+
+## Data and credits
+
+- **Forecasts:** NOAA/NCEP's [Global Forecast System](https://www.ncei.noaa.gov/products/weather-climate-models/global-forecast) and GFS-Wave (WAVEWATCH III), public domain, from the [NOAA Open Data Dissemination](https://www.noaa.gov/nodd) program on AWS (`noaa-gfs-bdp-pds`).
+- **Place names:** [GeoNames](https://www.geonames.org), licensed under CC BY 4.0. Answers that use them say so.
+- **Time zones:** [timezonefinder](https://github.com/jannikmi/timezonefinder), from OpenStreetMap time zone boundaries.
+- **Built with:** [FastAPI](https://fastapi.tiangolo.com), [NumPy](https://numpy.org), [pygrib](https://github.com/jswhit/pygrib) on ECMWF's ecCodes, and the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk).
+
+## Roadmap
+
+- Area forecasts: summaries for a region or a bounding box from the stored grid.
+- Forecast confidence: run-to-run changes now, the GEFS ensemble later.
+- More open models next to GFS; the store and API are model-agnostic.
+- Better point forecasts with local corrections for elevation and coasts.
+- OAuth for the MCP server, so assistants can connect without a pasted key.
+- Registration as a [Digital Public Good](https://digitalpublicgoods.net).
+
+Ideas and votes are welcome in [issues](https://github.com/similie/4Shadow-api/issues).
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup and the checks CI runs: lint, tests on Python 3.12 to 3.14, the Docker image, and a daily run on real GFS data. Please follow the [code of conduct](CODE_OF_CONDUCT.md), and report security problems privately as [SECURITY.md](SECURITY.md) describes.
+
+## License
+
+[GPL-3.0](LICENSE) © [Similie](https://similie.com). You can run, study, change and share this code; if you distribute a changed version, you share its source under the same license. The hosted service at api.4shadow.io has its own [terms](https://4shadow.io/terms).
+
+<p align="center">
+  <a href="https://4shadow.io/signup"><b>Get your free API key</b></a> and put a forecast for anywhere into your app.
+</p>
