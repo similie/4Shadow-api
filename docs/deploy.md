@@ -73,6 +73,14 @@ The commit before each update is kept in `.deploy/previous` and every update and
 
 A checkout on another branch is switched to `main` by `update`, but only when that is a pure move forward: `main` must contain the running commit, and a local `main` must not have commits of its own. Otherwise it stops and says so.
 
+**Servers on the old `forecast-v2` branch** (set up before v2 reached `main`) have no `deploy.sh` yet. Run it once from `main`, from outside the checkout, and keep that copy: a rollback to the old commit takes the script out of the checkout again.
+
+```sh
+cd /root/foreshadow-v2 && git fetch origin main
+git show origin/main:deploy/deploy.sh > /root/deploy.sh
+APP_DIR=/root/foreshadow-v2 bash /root/deploy.sh update     # and, if needed: ... rollback
+```
+
 Settings come from the environment: `BRANCH`, `API` (default `http://127.0.0.1:5003`), `API_UNIT`, `INGEST_UNIT`, `INGEST`, `PYTHON` and `SYSTEMCTL`. The script's header describes each.
 
 ## Docker Compose
