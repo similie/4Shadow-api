@@ -6,9 +6,10 @@ Notable changes to the forecast service. API answers only gain fields within a m
 
 ### Added
 
-- AIGFS, NOAA's operational AI model built on Google DeepMind's GraphCast, as a second model: `model=aigfs` on `/v2/forecast`, and `/v2/aigfs/...` for runs, variables, tiles, fields and threshold checks. 6-hourly to 16 days, on the same 0.25° grid.
+- AIGFS, NOAA's operational AI model built on Google DeepMind's GraphCast, as a second model: `/v2/aigfs/forecast`, and `/v2/aigfs/...` for runs, variables, tiles, fields and threshold checks. 6-hourly to 16 days, on the same 0.25° grid.
 - GFS variables: simulated radar reflectivity (`refc`), low, middle and high cloud (`lcc`, `mcc`, `hcc`), `freezing_level`, `frozen_precip`, `freezing_rain`, wind at 100 m (`u100`, `v100`), `soil_moisture`, `soil_moisture_10_40` and `soil_temp`.
 - Computed variables, for both models: `feels_like`, `heat_index`, `wet_bulb`, `vpd`, `fire_weather` (Fosberg index), and `wind_speed_100m`, `wind_dir_100m` and `wind_power_100m`. Daily summaries add `feels_like_max`, `feels_like_min`, `wet_bulb_max` and `fire_weather_max`.
+- `/v2/{model}/forecast`: the point forecast from any served model, with the same parameters as `/v2/forecast`. Each model has a path of its own, so a gateway can offer models to different plans (api.4shadow.io offers AIGFS on some plans).
 - `/v2/{model}/variables` gives the model's `title` and `description`.
 - `/v2/{model}/fields` serves computed variables too (`wet_bulb`, `fire_weather`, `wind_speed`...), worked out on the requested cells; their header entry lists `derived_from`.
 - Settings `FORECAST_MODELS` (default `gfs,aigfs`) and `AIGFS_BASE_URL`; `python -m forecast.ingest --model`.
@@ -20,6 +21,7 @@ Notable changes to the forecast service. API answers only gain fields within a m
 - Plain-language descriptions for the older variables (temperature, dew point, humidity, wind, gusts, pressure, precipitation, cloud, CAPE, precipitable water, visibility, solar radiation, snow depth, wave period), with what typical values mean.
 - `/v2/health` reports `degraded` (HTTP 200) when GFS has a run but another model doesn't yet. It is still 503 only without a GFS run.
 - The ingest loop reads each model in turn, with a lock per model.
+- `/v2/forecast` answers from GFS only. `model=gfs` still works there; another model answers 400 and names its path (`/v2/aigfs/forecast`). The parameter is no longer in the OpenAPI schema.
 - A full GFS run is about 15 GB on disk (was 9.5 GB) and about 4.5 GB to download (was 2.4 GB).
 
 ## 2.0.0 (2026-11-16)

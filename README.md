@@ -40,7 +40,7 @@
 
 - **A forecast for any coordinates or any place name.** Current conditions, an hourly timeline and local-day summaries for 45 variables: temperature, dew point and humidity, wind and gusts, pressure, rain, cloud (total, low, middle and high), solar radiation, CAPE, simulated radar, precipitable water, visibility, snow depth, freezing level, frozen precipitation and freezing rain, soil moisture and temperature, wind and wind power at 100 m, and at sea wave height, period and direction, wind sea and swell. Hourly to 5 days, then 3-hourly to 16 days.
 - **Heat, fire and comfort indices.** Feels-like temperature, heat index, wet-bulb temperature, vapour pressure deficit and the Fosberg fire weather index, computed from the forecast with published formulas. They work everywhere the other variables do, including maps and early warnings.
-- **Two models to compare.** NOAA's physics-based GFS, and AIGFS, NOAA's operational AI model built on Google DeepMind's GraphCast (`model=aigfs`, 6-hourly to 16 days).
+- **Two models to compare.** NOAA's physics-based GFS, and AIGFS, NOAA's operational AI model built on Google DeepMind's GraphCast (`/v2/aigfs/forecast`, 6-hourly to 16 days).
 - **Place search that never leaves the server.** Names to coordinates and coordinates to the nearest town, in any language GeoNames records, from a local SQLite index of every village on Earth.
 - **Map tiles and raw fields.** XYZ PNG tiles with fixed colour scales, and the numbers behind them as compact int16 grids for WebGL maps, particles and analysis (wind for the whole globe at 0.5° is about 1 MB).
 - **Early-warning checks.** Give an area and conditions ("50 mm of rain in 24 hours over a quarter of this district") and get back when the latest run meets them, with peaks and coverage. The 4Shadow site turns these answers into webhooks and emails.
@@ -106,6 +106,7 @@ For a server that stays current (four runs a day, every step to 16 days), the **
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /v2/forecast?lat&lon` or `?q=` | Point forecast: `current`, `timeseries` and local-day `daily` |
+| `GET /v2/{model}/forecast?lat&lon` | The same from another model, e.g. `/v2/aigfs/forecast` |
 | `GET /v2/places?q=` or `?lat&lon` | Place search, or the nearest towns to a point |
 | `GET /v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png` | XYZ map tiles |
 | `GET /v2/{model}/fields/{run}/{time}?vars=u10,v10` | Raw gridded values (binary `4SF1`) for client-side rendering |
