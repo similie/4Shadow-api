@@ -1,0 +1,28 @@
+# The forecast API and the GFS ingest, sharing one data volume.
+#   docker compose up -d                  # API on http://localhost:5003 (docs at /v2/docs)
+#   docker compose logs -f ingest         # the first run takes a while: ~2.4 GB to download
+# A smaller first run: FORECAST_MAX_FHR=24 docker compose up -d
+# Place search (names to coordinates): docker compose run --rm api python -m forecast.places build
+services:
+  api:
+    build: .
+    image: 4shadow-forecast
+    restart: unless-stopped
+    ports:
+      - "5003:5003"
+    volumes:
+      - forecast-data:/data
+
+  ingest:
+    image: 4shadow-forecast
+    depends_on: [api]
+    restart: unless-stopped
+    command: ["python", "-m", "forecast.ingest", "--loop", "--poll", "600"]
+    environment:
+      FORECAST_MAX_FHR: ${FORECAST_MAX_FHR:-384}
+      FORECAST_KEEP_RUNS: ${FORECAST_KEEP_RUNS:-2}
+    volumes:
+      - forecast-data:/data
+
+volumes:
+  forecast-data:

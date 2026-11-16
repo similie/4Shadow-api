@@ -1,0 +1,21 @@
+name: Idea or request
+description: A variable, a model, an endpoint or anything else you'd like the service to do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What do you want to do?
+      description: The problem or the use, in your own words. "Alerts for wind gusts over a coastline" says more than "add gusts".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could it work?
+      description: Optional. An endpoint, a parameter, a variable from GFS (its `.idx` name and level), another open model.
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Who it would help, other services that do it, links.

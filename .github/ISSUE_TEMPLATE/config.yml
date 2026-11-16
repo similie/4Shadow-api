@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: API documentation
+    url: https://4shadow.io/docs
+    about: Endpoints, variables, plans and limits of the hosted 4Shadow API.
+  - name: Account, key or billing
+    url: https://4shadow.io/console
+    about: Your keys, usage and plan. For anything else about your account, write to sales@4shadow.io.
+  - name: Report a security problem
+    url: https://github.com/similie/4Shadow-api/blob/main/SECURITY.md
+    about: Please don't open a public issue. See the security policy.
