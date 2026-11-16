@@ -1,0 +1,10 @@
+# Lint settings; CI runs `ruff check`. The code isn't auto-formatted, so there are no format rules.
+target-version = "py312"
+line-length = 120
+extend-exclude = ["terrain", "4shadow", "data"]
+
+[lint]
+# Errors and likely bugs only: pyflakes, pycodestyle's error classes, bugbear.
+select = ["E4", "E7", "E9", "F", "B"]
+# zip() without strict= is fine here: the lengths are checked where it matters.
+ignore = ["B905"]

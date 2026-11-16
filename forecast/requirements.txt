@@ -1,7 +1,7 @@
-# Forecast v2 runtime dependencies (independent of the v1/terrain requirements.txt, which pins
-# numpy 2.1 for GDAL). Install into its own venv: pip install -r forecast/requirements.txt
+# The forecast service's runtime dependencies (the root requirements.txt installs these). The
+# experimental terrain engine has its own set, in terrain/requirements.txt.
 numpy==2.5.4
-pygrib==2.1.6
+pygrib==2.1.8
 fastapi==0.162.5
 starlette==1.10.0
 pydantic==2.14.3
