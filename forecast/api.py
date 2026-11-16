@@ -12,13 +12,14 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
+from typing import Annotated
 
-from fastapi import FastAPI, Path, Query
+from fastapi import Depends, FastAPI, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from . import __version__, fields, legacy_v1, mcp_server
-from .catalog import CATALOGS
+from .catalog import CATALOGS, GFS
 from .config import Settings, get_settings
 from .places import ATTRIBUTION as PLACES_ATTRIBUTION
 from .places import PlaceIndex
@@ -31,6 +32,27 @@ MAX_TILE_ZOOM = 12
 STALE_AFTER_HOURS = 12
 LATEST_MAX_AGE = 300
 IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+# The point-forecast query, shared by /v2/forecast (GFS) and /v2/{model}/forecast.
+def forecast_options(
+    lat: float | None = Query(None, ge=-90, le=90, description="Latitude in degrees (or give q)"),
+    lon: float | None = Query(None, ge=-180, le=360, description="Longitude in degrees (or give q)"),
+    q: str | None = Query(None, max_length=200, description=(
+        "Place name instead of lat/lon, e.g. 'Paris, France'. The best match is used; location.place says "
+        "which, and location.alternatives lists other places with the same name.")),
+    run: str = Query("latest", description="'latest' or a run id YYYYMMDDHH"),
+    variables: str | None = Query(None, alias="vars", description="Comma-separated variable ids; default all"),
+    hours: int = Query(384, ge=1, le=384, description="Length of the returned timeseries"),
+    start: str = Query("now", pattern="^(now|run)$", description="Start the timeseries at the current hour or at run start"),
+    tz: str | None = Query(None, description="IANA time zone for daily aggregation; default from coordinates"),
+    daily: bool = Query(True),
+) -> dict:
+    return {"lat": lat, "lon": lon, "q": q, "run": run, "variables": variables, "hours": hours, "start": start,
+            "tz": tz, "daily": daily}
+
+
+ForecastOptions = Annotated[dict, Depends(forecast_options)]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -81,6 +103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "endpoints": {
                 "forecast": "/v2/forecast?lat=-8.56&lon=125.57",
                 "forecast_by_place": "/v2/forecast?q=Dili, Timor-Leste",
+                "forecast_by_model": "/v2/{model}/forecast?lat=-8.56&lon=125.57",
                 "places": "/v2/places?q=Paris",
                 "nearest_places": "/v2/places?lat=-8.56&lon=125.57",
                 "runs": "/v2/{model}/runs",
@@ -174,21 +197,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"query": query, "results": [p.to_dict() for p in results], "attribution": PLACES_ATTRIBUTION},
                             headers={"Cache-Control": "public, max-age=86400"})
 
-    @app.get("/v2/forecast", tags=["forecast"])
-    def forecast(
-        lat: float | None = Query(None, ge=-90, le=90, description="Latitude in degrees (or give q)"),
-        lon: float | None = Query(None, ge=-180, le=360, description="Longitude in degrees (or give q)"),
-        q: str | None = Query(None, max_length=200, description=(
-            "Place name instead of lat/lon, e.g. 'Paris, France'. The best match is used; location.place says "
-            "which, and location.alternatives lists other places with the same name.")),
-        model: str = Query("gfs", description="Forecast model: gfs, or aigfs (NOAA's AI model). See /v2"),
-        run: str = Query("latest", description="'latest' or a run id YYYYMMDDHH"),
-        variables: str | None = Query(None, alias="vars", description="Comma-separated variable ids; default all"),
-        hours: int = Query(384, ge=1, le=384, description="Length of the returned timeseries"),
-        start: str = Query("now", pattern="^(now|run)$", description="Start the timeseries at the current hour or at run start"),
-        tz: str | None = Query(None, description="IANA time zone for daily aggregation; default from coordinates"),
-        daily: bool = Query(True),
-    ):
+    def answer_forecast(model: str, o: dict) -> JSONResponse:
+        q, lat, lon = o.pop("q"), o.pop("lat"), o.pop("lon")
         if q and q.strip():
             if lat is not None or lon is not None:
                 raise ForecastError(400, "Give either q or lat and lon, not both")
@@ -197,13 +207,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             where = places.at(lat, lon)
         else:
             raise ForecastError(400, "Give lat and lon, or q (a place name)")
-        r, body = point_forecast(stores, where.lat, where.lon, model=model, run=run, variables=variables, hours=hours,
-                                 start=start, tz=tz, daily=daily)
+        r, body = point_forecast(stores, where.lat, where.lon, model=model, **o)
         body["location"].update(where.location_fields())
         if where.place is not None or where.nearby is not None:
             body["source"] = {**body["source"], "places": PLACES_ATTRIBUTION}
         headers = {"Cache-Control": f"public, max-age={LATEST_MAX_AGE}", "X-Forecast-Run": r.id}
         return JSONResponse(body, headers=headers)
+
+    @app.get("/v2/forecast", tags=["forecast"])
+    def forecast(
+        o: ForecastOptions,
+        model: str = Query(GFS.model, include_in_schema=False),
+    ):
+        """A GFS forecast for a point or place. Other models answer at /v2/{model}/forecast, a path of their
+        own so that a gateway can offer each model to different plans."""
+        if model != GFS.model:  # accepted before models had paths; gfs still is
+            raise ForecastError(400, f"Forecasts from {model} are at /v2/{model}/forecast")
+        return answer_forecast(GFS.model, o)
+
+    @app.get("/v2/{model}/forecast", tags=["forecast"])
+    def model_forecast(model: str, o: ForecastOptions):
+        """The same forecast from another model: /v2/aigfs/forecast for AIGFS (see /v2 for the models)."""
+        return answer_forecast(model, o)
 
     @app.get("/v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png", tags=["tiles"],
              response_class=Response, responses={200: {"content": {"image/png": {}}}})

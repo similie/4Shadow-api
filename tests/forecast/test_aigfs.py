@@ -117,6 +117,10 @@ def test_ingest_and_serve_an_aigfs_run(tmp_path, monkeypatch):
     assert ts["sp"] == [1000.0, 1000.0, None]  # missing from one step's file: empty there, run still published
     assert ts["wind_speed_100m"][0] == 10.0 and ts["heat_index"][0] > ts["t2m"][0]
 
+    api = TestClient(create_app(settings))
+    r = api.get("/v2/aigfs/forecast", params={"lat": -8.56, "lon": 125.57, "vars": "t2m", "start": "run", "daily": False})
+    assert r.status_code == 200 and r.json()["model"] == "aigfs" and r.json()["timeseries"]["t2m"][0] == 26.9
+
 
 def test_health_and_routes_with_a_second_model(store_root):
     both = TestClient(create_app(Settings(data_root=store_root)))
@@ -124,14 +128,21 @@ def test_health_and_routes_with_a_second_model(store_root):
     assert h.status_code == 200 and h.json()["status"] == "degraded"  # GFS is in; AIGFS not yet
     assert h.json()["models"]["aigfs"] == {"latest_run": None}
     assert both.get("/v2").json()["models"]["aigfs"].startswith("NOAA AIGFS")
-    r = both.get("/v2/forecast", params={"lat": 0, "lon": 0, "model": "aigfs"})
+    r = both.get("/v2/aigfs/forecast", params={"lat": 0, "lon": 0})
     assert r.status_code == 503 and "aigfs" in r.json()["detail"]
+    # Each model has a path of its own, so a gateway can offer models to different plans. /v2/forecast
+    # is GFS's, and model=gfs, accepted before models had paths, still works there.
+    r = both.get("/v2/forecast", params={"lat": 0, "lon": 0, "model": "aigfs"})
+    assert r.status_code == 400 and "/v2/aigfs/forecast" in r.json()["detail"]
+    assert both.get("/v2/forecast", params={"lat": 0, "lon": 0, "model": "gfs"}).json()["model"] == "gfs"
+    assert both.get("/v2/gfs/forecast", params={"lat": 0, "lon": 0}).json()["model"] == "gfs"
+    assert "forecast_by_model" in both.get("/v2").json()["endpoints"]
     v = both.get("/v2/aigfs/variables").json()
     assert "GraphCast" in v["description"] and "rh2m" in {x["id"] for x in v["variables"]}
 
     gfs_only = TestClient(create_app(Settings(data_root=store_root, models=("gfs",))))
     assert gfs_only.get("/v2/health").json()["status"] == "ok"
-    assert gfs_only.get("/v2/forecast", params={"lat": 0, "lon": 0, "model": "aigfs"}).status_code == 404
+    assert gfs_only.get("/v2/aigfs/forecast", params={"lat": 0, "lon": 0}).status_code == 404
     assert gfs_only.get("/v2/aigfs/runs").status_code == 404
 
 
