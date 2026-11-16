@@ -1,0 +1,55 @@
+name: Bug report
+description: The forecast service, its ingest or its docs don't work as they should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. For a problem with your 4Shadow account, key or billing, write to sales@4shadow.io instead.
+        Never paste an API key or an `.env` file here.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part?
+      options:
+        - Forecast API (/v2)
+        - Ingest (GFS, GFS-Wave)
+        - Place search
+        - MCP server
+        - Early-warning thresholds
+        - Map tiles or fields
+        - Self-hosting (Docker, systemd, deploy script)
+        - The hosted API at api.4shadow.io
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the exact error text, and for API answers the status code and `detail`.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to make it happen
+      description: The request (without your key) or the command, and the run id (`/v2/gfs/runs`) if it matters.
+      placeholder: |
+        curl 'localhost:5003/v2/forecast?lat=-8.556&lon=125.56&hours=48'
+        run 2026111600
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Python (`python -V`), OS, and the commit or `version` from `/v2`.
+      placeholder: Python 3.12.3, Ubuntu 24.04, commit abc1234
+    validations:
+      required: true
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Logs (`forecast-api.log`, `forecast-ingest.log`), a screenshot of a tile.
