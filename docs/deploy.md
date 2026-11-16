@@ -64,7 +64,7 @@ deploy/deploy.sh rollback    # back to the commit before the last update
 
 1. Refuses to run if tracked files were changed by hand.
 2. Fetches and fast-forwards. It never merges or rewrites history; a checkout that has diverged from the branch is left as it is.
-3. Installs `requirements.txt` and checks that the new code imports. If it doesn't, the checkout goes back to the old commit and nothing is restarted.
+3. Installs `forecast/requirements.txt` and checks that the new code imports. If it doesn't, the checkout goes back to the old commit and nothing is restarted.
 4. Restarts the API and waits for it to answer.
 5. Restarts the ingest **only if the ingest code changed**, because a restart begins any run being downloaded again. `INGEST=skip` or `INGEST=restart` overrides this.
 6. Runs the smoke tests: health, a forecast by coordinates and by name, place search, a tile, a field (decoded), the MCP handshake and the legacy `/v1` shim.

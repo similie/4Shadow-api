@@ -140,8 +140,10 @@ restart_ingest_if_needed() {
   fi
 }
 
+# The service's own requirements. Not the root requirements.txt: before 2.0 it held v1's set (GDAL,
+# an older numpy), which a rollback to such a commit must not install into the service's venv.
 install() {
-  "$PYTHON" -m pip install -q --disable-pip-version-check -r requirements.txt || return 1
+  "$PYTHON" -m pip install -q --disable-pip-version-check -r forecast/requirements.txt || return 1
   "$PYTHON" -c "import forecast.api, forecast.ingest; print('Code imports: forecast', forecast.__version__)"
 }
 
@@ -197,7 +199,7 @@ rollback() {
   to=$(cat "$STATE/previous")
   say "Rolling back: $(git log --oneline -1 "$from") -> $(git log --oneline -1 "$to")"
   git reset -q --hard "$to"
-  install
+  install || die "the old code doesn't install or import; the checkout is at $(git log --oneline -1), nothing was restarted"
   rm -f "$STATE/previous" # one step back only; `update` moves forward again
   echo "$(date -u +%FT%TZ) rollback $from -> $to" >>"$STATE/history"
   "${SYSTEMCTL[@]}" restart "$API_UNIT"
