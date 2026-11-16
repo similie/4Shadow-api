@@ -21,6 +21,7 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from ..grid import Grid
+from .base import Source
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,9 @@ def source_info(base_url: str, run: datetime, products=("atmos",)) -> dict:
         info["provider"] += ", with GFS-Wave (WAVEWATCH III) sea state"
         info["wave_url"] = f"{base_url}/gfs.{run:%Y%m%d}/{run:%H}/wave/gridded/"
     return info
+
+
+SOURCE = Source("gfs", GRID, MAX_FHR, DEFAULT_BASE_URL, forecast_hours, file_url, source_info, CYCLE_HOURS)
 
 
 # --------------------------------------------------------------------------- .idx parsing
@@ -160,17 +164,20 @@ def merge_ranges(records: list[IdxRecord], max_gap: int = 512 * 1024) -> list[Ra
 # --------------------------------------------------------------------------- HTTP client
 
 
-class GfsClient:
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: float = 60.0, retries: int = 4,
-                 session: requests.Session | None = None) -> None:
-        self.base_url = base_url.rstrip("/")
+class GribClient:
+    """Index and byte-range downloads for one source (GFS by default; see sources/__init__.py)."""
+
+    def __init__(self, base_url: str | None = None, timeout: float = 60.0, retries: int = 4,
+                 session: requests.Session | None = None, source: Source = SOURCE) -> None:
+        self.source = source
+        self.base_url = (base_url or source.default_base_url).rstrip("/")
         self.timeout = timeout
         self.retries = retries
         self.session = session or requests.Session()
         adapter = HTTPAdapter(pool_connections=4, pool_maxsize=32)
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
-        self.session.headers["User-Agent"] = "foreshadow-forecast/2 (+open-source GFS ingest)"
+        self.session.headers["User-Agent"] = "4shadow-forecast/2 (+https://github.com/similie/4Shadow-api)"
 
     def _request(self, method: str, url: str, headers: dict | None = None,
                  not_found_ok: bool = False) -> requests.Response | None:
@@ -192,16 +199,16 @@ class GfsClient:
         raise RuntimeError(f"{method} {url} failed after {self.retries} attempts: {last}")
 
     def has_idx(self, run: datetime, fhr: int, product: str = "atmos") -> bool:
-        url = file_url(self.base_url, run, fhr, product) + ".idx"
+        url = self.source.file_url(self.base_url, run, fhr, product) + ".idx"
         return self._request("HEAD", url, not_found_ok=True) is not None
 
     def idx(self, run: datetime, fhr: int, product: str = "atmos") -> list[IdxRecord] | None:
-        resp = self._request("GET", file_url(self.base_url, run, fhr, product) + ".idx", not_found_ok=True)
+        resp = self._request("GET", self.source.file_url(self.base_url, run, fhr, product) + ".idx", not_found_ok=True)
         return None if resp is None else parse_idx(resp.text)
 
     def fetch_records(self, run: datetime, fhr: int, records: list[IdxRecord],
                       product: str = "atmos") -> dict[int, bytes]:
-        url = file_url(self.base_url, run, fhr, product)
+        url = self.source.file_url(self.base_url, run, fhr, product)
         blobs: dict[int, bytes] = {}
         for group in merge_ranges(records):
             rng = f"bytes={group.start}-" + ("" if group.end is None else str(group.end))
@@ -219,17 +226,20 @@ class GfsClient:
                 blobs[rec.num] = blob
         return blobs
 
-    def latest_complete_run(self, now: datetime | None = None, max_fhr: int = MAX_FHR,
+    def latest_complete_run(self, now: datetime | None = None, max_fhr: int | None = None,
                             lookback_cycles: int = 8) -> datetime | None:
         """Newest cycle whose final required step has been published."""
         now = now or datetime.now(timezone.utc)
         cycle = now.replace(hour=now.hour - now.hour % 6, minute=0, second=0, microsecond=0)
-        last_fhr = forecast_hours(max_fhr)[-1]
+        last_fhr = self.source.forecast_hours(self.source.max_fhr if max_fhr is None else max_fhr)[-1]
         for k in range(lookback_cycles):
             run = cycle - timedelta(hours=6 * k)
             if self.has_idx(run, last_fhr):
                 return run
         return None
+
+
+GfsClient = GribClient  # the name before other sources were added
 
 
 # --------------------------------------------------------------------------- decoding

@@ -23,7 +23,7 @@ from .config import Settings, get_settings
 from .places import ATTRIBUTION as PLACES_ATTRIBUTION
 from .places import PlaceIndex
 from .render import render_tile
-from .service import ForecastError, get_catalog, get_run, point_forecast, step_for
+from .service import ForecastError, enabled_catalog, get_run, point_forecast, step_for
 from .store import RunStore, iso, parse_run_id
 from .thresholds import ThresholdRequest, check_thresholds
 
@@ -35,7 +35,7 @@ IMMUTABLE = "public, max-age=31536000, immutable"
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    stores = {model: RunStore(settings.data_root, model) for model in CATALOGS}
+    stores = {model: RunStore(settings.data_root, model) for model in settings.models}  # GFS first
     places = PlaceIndex(settings.places_db)
     mcp = mcp_server.build_server(stores, places)
     mcp_routes = mcp_server.http_routes(mcp)  # creates the session manager the lifespan runs
@@ -77,7 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "name": "Foreshadow Forecast API",
             "version": __version__,
             "docs": "/v2/docs",
-            "models": {m: c.title for m, c in CATALOGS.items()},
+            "models": {m: CATALOGS[m].title for m in stores},
             "endpoints": {
                 "forecast": "/v2/forecast?lat=-8.56&lon=125.57",
                 "forecast_by_place": "/v2/forecast?q=Dili, Timor-Leste",
@@ -93,22 +93,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v2/health", tags=["meta"])
     def health():
+        """ok: every model has a run. degraded: GFS has one but another model doesn't (yet). unavailable
+        (503): no GFS run, so forecasts can't be served."""
         now = datetime.now(timezone.utc)
-        models, ok = {}, True
+        models = {}
         for model, store in stores.items():
             rid = store.latest_id()
             if rid is None:
-                ok = False
                 models[model] = {"latest_run": None}
                 continue
             age = (now - parse_run_id(rid)).total_seconds() / 3600
             models[model] = {"latest_run": rid, "age_hours": round(age, 1), "stale": age > STALE_AFTER_HOURS}
-        return JSONResponse({"status": "ok" if ok else "unavailable", "version": __version__, "models": models},
-                            status_code=200 if ok else 503)
+        primary = next(iter(stores))
+        if all(m["latest_run"] for m in models.values()):
+            status = "ok"
+        else:
+            status = "degraded" if models[primary]["latest_run"] else "unavailable"
+        return JSONResponse({"status": status, "version": __version__, "models": models},
+                            status_code=503 if status == "unavailable" else 200)
 
     @app.get("/v2/{model}/runs", tags=["meta"])
     def list_runs(model: str):
-        get_catalog(model)
+        enabled_catalog(stores, model)
         store = stores[model]
         runs = []
         for rid in reversed(store.run_ids()):
@@ -132,15 +138,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "init_time": iso(r.init_time),
             "forecast_hours": r.forecast_hours.tolist(),
             "valid_times": [iso(t) for t in r.valid_times],
-            "variables": sorted(v.id for v in get_catalog(model).available(r.variables)),
+            "variables": sorted(v.id for v in enabled_catalog(stores, model).available(r.variables)),
             "source": r.manifest.get("source", {}),
         }
 
     @app.get("/v2/{model}/variables", tags=["meta"])
     def variables(model: str):
-        cat = get_catalog(model)
+        cat = enabled_catalog(stores, model)
         return {
             "model": model,
+            "title": cat.title,
+            "description": cat.description,
             "variables": [v.describe() for v in cat.variables.values()],
             "daily": [{"id": d.id, "source": d.source, "aggregation": d.how, "units": d.units} for d in cat.daily],
         }
@@ -173,7 +181,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         q: str | None = Query(None, max_length=200, description=(
             "Place name instead of lat/lon, e.g. 'Paris, France'. The best match is used; location.place says "
             "which, and location.alternatives lists other places with the same name.")),
-        model: str = Query("gfs"),
+        model: str = Query("gfs", description="Forecast model: gfs, or aigfs (NOAA's AI model). See /v2"),
         run: str = Query("latest", description="'latest' or a run id YYYYMMDDHH"),
         variables: str | None = Query(None, alias="vars", description="Comma-separated variable ids; default all"),
         hours: int = Query(384, ge=1, le=384, description="Length of the returned timeseries"),
@@ -208,7 +216,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         x: int = Path(..., ge=0),
         y: int = Path(..., ge=0),
     ):
-        cat = get_catalog(model)
+        cat = enabled_catalog(stores, model)
         r = get_run(stores, model, run)
         if x >= 2**z or y >= 2**z:
             raise ForecastError(404, "Tile outside the world")
@@ -228,7 +236,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         model: str,
         run: str,
         time: str = Path(..., description="fNNN (forecast hour) or YYYYMMDDHH (valid time, UTC)"),
-        variables: str = Query(..., alias="vars", description="Comma-separated stored variable ids, at most 4, e.g. u10,v10"),
+        variables: str = Query(..., alias="vars", description="Comma-separated variable ids, at most 4, e.g. u10,v10 or wet_bulb"),
         stride: int = Query(1, ge=1, le=fields.MAX_STRIDE, description="Take every Nth cell: 1 = 0.25°, 2 = 0.5°, 4 = 1°"),
         bbox: str | None = Query(None, description="west,south,east,north in degrees; default the whole globe"),
     ):
@@ -236,7 +244,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         particles, contours). A small binary: an 8-byte preamble ("4SF1" + header length), a JSON header
         with the grid, units, scale and offset, then one int16 array per variable (rows north to south).
         value = raw * scale + offset; -32768 is missing."""
-        cat = get_catalog(model)
+        cat = enabled_catalog(stores, model)
         r = get_run(stores, model, run)
         body = fields.encode_field(cat, r, time, [s.strip() for s in variables.split(",") if s.strip()], stride, bbox)
         cache = IMMUTABLE if run != "latest" else f"public, max-age={LATEST_MAX_AGE}"
@@ -250,7 +258,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         conditions such as `precip >= 50` with `accumulate_hours: 24`, and how many days ahead to look.
         Returns each period that meets them (consecutive steps, breaks under 6 h merged) with its
         peak value, time and place. Stateless: storing alerts and sending webhooks is up to the caller."""
-        cat = get_catalog(model)
+        cat = enabled_catalog(stores, model)
         r = get_run(stores, model, body.run)
         return JSONResponse(check_thresholds(r, cat, body), headers={"Cache-Control": "no-store", "X-Forecast-Run": r.id})
 

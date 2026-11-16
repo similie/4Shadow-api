@@ -266,8 +266,13 @@ def rolling_total(rate: np.ndarray, hours: np.ndarray, window: int) -> np.ndarra
 
 def _values(run: Run, cat: ModelCatalog, area: Area, v: Variable) -> np.ndarray:
     if v.derived_from:
-        return derive(v.id, {d: area.sample(run, d) for d in v.derived_from}).astype(np.float32)
-    vals = area.sample(run, v.id)
+        vals = derive(v.id, {d: area.sample(run, d) for d in v.derived_from}).astype(np.float32)
+    else:
+        vals = area.sample(run, v.id)
+    if v.land_only and area.kind != "point" and (land := run.land_mask()) is not None:
+        vals = np.where(land[area.rows, area.cols][None, :], vals, np.float32(np.nan))  # water cells don't count
+    if v.derived_from:
+        return vals
     if area.kind == "point" and v.marine and np.isnan(vals).all():
         # On a coast the model's cells are land: use the nearest open sea, as point forecasts do.
         lat, lon = area.center

@@ -12,9 +12,11 @@ format "4SF1", that browsers read with a DataView and upload straight to GPU tex
     then        one array per variable, in header order: int16 little-endian, nlat x nlon,
                 rows north -> south, columns west -> east
 
-value = raw * scale + offset, and raw -32768 means missing (no data at that cell). These are the
-store's own int16 values, so serving a field is slicing, not computing. The header carries the
-grid (lat0/lon0 of the first row/column and the spacing), units and semantics of each variable.
+value = raw * scale + offset, and raw -32768 means missing (no data at that cell). Stored variables
+are the store's own int16 values, so serving them is slicing, not computing; computed variables (heat
+index, wet-bulb, fire weather...) are derived from those on the requested cells and quantised with
+their catalog scale. The header carries the grid (lat0/lon0 of the first row/column and the
+spacing), units and semantics of each variable.
 """
 
 from __future__ import annotations
@@ -25,9 +27,9 @@ import struct
 
 import numpy as np
 
-from .catalog import ModelCatalog, Variable
+from .catalog import ModelCatalog, Variable, derive
 from .service import ForecastError, step_for
-from .store import MISSING, Run, iso
+from .store import MISSING, Run, decode, encode, iso
 
 MAGIC = b"4SF1"
 MAX_VARS = 4
@@ -84,16 +86,12 @@ def encode_field(cat: ModelCatalog, run: Run, time_ref: str, var_ids: list[str],
         raise ForecastError(400, f"At most {MAX_VARS} variables per field request")
     if not 1 <= stride <= MAX_STRIDE:
         raise ForecastError(400, f"stride must be 1..{MAX_STRIDE}")
-    stored = {v.id: v for v in cat.stored_variables() if v.id in run.variables}
+    available = {v.id: v for v in cat.available(run.variables)}
     variables: list[Variable] = []
     for vid in var_ids:
-        if vid not in stored:
-            hint = ""
-            v = cat.get(vid)
-            if v is not None and v.derived_from:
-                hint = f" {vid} is computed from {', '.join(v.derived_from)}: request those."
-            raise ForecastError(400, f"No field for {vid!r}.{hint} Fields: {sorted(stored)}")
-        variables.append(stored[vid])
+        if vid not in available:
+            raise ForecastError(400, f"No field for {vid!r}. Fields: {sorted(available)}")
+        variables.append(available[vid])
     step = step_for(run, time_ref)
     west, south, east, north = parse_bbox(bbox)
     rows = _rows(run, south, north, stride)
@@ -121,7 +119,8 @@ def encode_field(cat: ModelCatalog, run: Run, time_ref: str, var_ids: list[str],
         "missing": MISSING,
         "variables": [
             {"id": v.id, "name": v.name, "units": v.units, "semantics": "interval_mean" if v.interval else "instant",
-             "scale": run.variables[v.id]["scale"], "offset": run.variables[v.id]["offset"]}
+             **({"scale": run.variables[v.id]["scale"], "offset": run.variables[v.id]["offset"]} if v.stored else
+                {"scale": v.scale, "offset": v.offset, "derived_from": list(v.derived_from)})}
             for v in variables
         ],
     }
@@ -130,7 +129,15 @@ def encode_field(cat: ModelCatalog, run: Run, time_ref: str, var_ids: list[str],
     parts = [MAGIC, struct.pack("<I", len(text)), text]
     ix = np.ix_(rows, cols)
     for v in variables:
-        parts.append(np.ascontiguousarray(run.array(v.id)[step][ix], dtype="<i2").tobytes())
+        if v.stored:
+            raw = run.array(v.id)[step][ix]
+        else:
+            inputs = {d: decode(run.array(d)[step][ix], run.variables[d]["scale"], run.variables[d]["offset"])
+                      for d in v.derived_from}
+            raw = encode(derive(v.id, inputs), v.scale, v.offset)
+        if v.land_only and (land := run.land_mask()) is not None:
+            raw = np.where(land[ix], raw, np.int16(MISSING))
+        parts.append(np.ascontiguousarray(raw, dtype="<i2").tobytes())
     return b"".join(parts)
 
 
