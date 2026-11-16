@@ -11,7 +11,7 @@
 
 <p align="center">
   Point forecasts, map tiles, raw gridded fields, place search, early-warning checks and an MCP server for AI assistants,<br />
-  16 days ahead, from NOAA's open GFS and GFS-Wave data. The engine behind <a href="https://4shadow.io">4Shadow</a>.
+  16 days ahead, from NOAA's open GFS, GFS-Wave and AIGFS (AI) data. The engine behind <a href="https://4shadow.io">4Shadow</a>.
 </p>
 
 <p align="center">
@@ -38,7 +38,9 @@
 
 ## What it does
 
-- **A forecast for any coordinates or any place name.** Current conditions, an hourly timeline and local-day summaries for 25 variables: temperature, dew point and humidity, wind and gusts, pressure, rain, cloud, solar radiation, CAPE, precipitable water, visibility and snow depth, and at sea wave height, period and direction, wind sea and swell. Hourly to 5 days, then 3-hourly to 16 days.
+- **A forecast for any coordinates or any place name.** Current conditions, an hourly timeline and local-day summaries for 45 variables: temperature, dew point and humidity, wind and gusts, pressure, rain, cloud (total, low, middle and high), solar radiation, CAPE, simulated radar, precipitable water, visibility, snow depth, freezing level, frozen precipitation and freezing rain, soil moisture and temperature, wind and wind power at 100 m, and at sea wave height, period and direction, wind sea and swell. Hourly to 5 days, then 3-hourly to 16 days.
+- **Heat, fire and comfort indices.** Feels-like temperature, heat index, wet-bulb temperature, vapour pressure deficit and the Fosberg fire weather index, computed from the forecast with published formulas. They work everywhere the other variables do, including maps and early warnings.
+- **Two models to compare.** NOAA's physics-based GFS, and AIGFS, NOAA's operational AI model built on Google DeepMind's GraphCast (`model=aigfs`, 6-hourly to 16 days).
 - **Place search that never leaves the server.** Names to coordinates and coordinates to the nearest town, in any language GeoNames records, from a local SQLite index of every village on Earth.
 - **Map tiles and raw fields.** XYZ PNG tiles with fixed colour scales, and the numbers behind them as compact int16 grids for WebGL maps, particles and analysis (wind for the whole globe at 0.5° is about 1 MB).
 - **Early-warning checks.** Give an area and conditions ("50 mm of rain in 24 hours over a quarter of this district") and get back when the latest run meets them, with peaks and coverage. The 4Shadow site turns these answers into webhooks and emails.
@@ -119,7 +121,7 @@ The **[forecast service guide](forecast/README.md)** has the details: parameters
 
 ```mermaid
 flowchart TB
-  noaa["<b>NOAA open data on AWS</b><br/>GFS + GFS-Wave, 0.25°, 4 runs a day"]
+  noaa["<b>NOAA open data on AWS</b><br/>GFS + GFS-Wave, AIGFS, 0.25°, 4 runs a day"]
   ingest["<b>Ingest</b> (forecast.ingest)<br/>byte-range downloads · decode · quantise"]
   store[("<b>Store</b><br/>one int16 .npy per variable per run<br/>published atomically")]
   api["<b>API</b> (FastAPI, forecast.api)<br/>memory-mapped reads · bilinear points · tiles"]
@@ -143,7 +145,7 @@ flowchart TB
 
 ## Data and credits
 
-- **Forecasts:** NOAA/NCEP's [Global Forecast System](https://www.ncei.noaa.gov/products/weather-climate-models/global-forecast) and GFS-Wave (WAVEWATCH III), public domain, from the [NOAA Open Data Dissemination](https://www.noaa.gov/nodd) program on AWS (`noaa-gfs-bdp-pds`).
+- **Forecasts:** NOAA/NCEP's [Global Forecast System](https://www.ncei.noaa.gov/products/weather-climate-models/global-forecast) and GFS-Wave (WAVEWATCH III), public domain, and NOAA/NCEP's AIGFS (based on Google DeepMind's GraphCast; NOAA's products are CC0), from the [NOAA Open Data Dissemination](https://www.noaa.gov/nodd) program on AWS (`noaa-gfs-bdp-pds`, `noaa-nws-graphcastgfs-pds`).
 - **Place names:** [GeoNames](https://www.geonames.org), licensed under CC BY 4.0. Answers that use them say so.
 - **Time zones:** [timezonefinder](https://github.com/jannikmi/timezonefinder), from OpenStreetMap time zone boundaries.
 - **Built with:** [FastAPI](https://fastapi.tiangolo.com), [NumPy](https://numpy.org), [pygrib](https://github.com/jswhit/pygrib) on ECMWF's ecCodes, and the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk).
@@ -151,8 +153,9 @@ flowchart TB
 ## Roadmap
 
 - Area forecasts: summaries for a region or a bounding box from the stored grid.
-- Forecast confidence: run-to-run changes now, the GEFS ensemble later.
-- More open models next to GFS; the store and API are model-agnostic.
+- More models: ECMWF's open IFS and AIFS next, then ensembles for the chance of an event.
+- Air quality and dust (NOAA GEFS-Aerosols), and earthquake and wildfire feeds for early warnings.
+- Forecast confidence from how much the models agree.
 - Better point forecasts with local corrections for elevation and coasts.
 - OAuth for the MCP server, so assistants can connect without a pasted key.
 - Registration as a [Digital Public Good](https://digitalpublicgoods.net).

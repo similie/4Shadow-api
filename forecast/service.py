@@ -39,8 +39,15 @@ def get_catalog(model: str) -> ModelCatalog:
     return cat
 
 
+def enabled_catalog(stores: dict[str, RunStore], model: str) -> ModelCatalog:
+    """The catalog of a model this server serves (FORECAST_MODELS)."""
+    if model not in stores:
+        raise ForecastError(404, f"Unknown model {model!r}. Available: {list(stores)}")
+    return get_catalog(model)
+
+
 def get_run(stores: dict[str, RunStore], model: str, ref: str) -> Run:
-    get_catalog(model)
+    enabled_catalog(stores, model)
     if ref != "latest" and not RUN_ID_RE.match(ref):
         raise ForecastError(400, "run must be 'latest' or YYYYMMDDHH")
     run = stores[model].get(ref)
@@ -93,7 +100,7 @@ def point_forecast(
     """The /v2/forecast response body for one point, and the run it came from."""
     if not (-90 <= lat <= 90) or not (-180 <= lon <= 360):
         raise ForecastError(400, "lat must be within -90..90 and lon within -180..360")
-    cat = get_catalog(model)
+    cat = enabled_catalog(stores, model)
     r = get_run(stores, model, run)
     wanted = resolve_vars(cat, r, variables)
     try:

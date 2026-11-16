@@ -30,8 +30,14 @@ def tile_values(run: Run, var: Variable, step: int, z: int, x: int, y: int) -> n
     lat, lon = tile_pixel_centers(z, x, y, TILE_SIZE)
     rows, cols = run.grid.row_weights(lat), run.grid.col_weights(lon)
     if var.derived_from:
-        return derive(var.id, {d: run.sample_field(d, step, rows, cols) for d in var.derived_from})
-    return run.sample_field(var.id, step, rows, cols)
+        values = derive(var.id, {d: run.sample_field(d, step, rows, cols) for d in var.derived_from})
+    else:
+        values = run.sample_field(var.id, step, rows, cols)
+    if var.land_only:
+        land = run.land_mask(rows, cols)
+        if land is not None:
+            values = np.where(land, values, np.float32(np.nan))
+    return values
 
 
 def render_tile(run: Run, var: Variable, step: int, z: int, x: int, y: int) -> bytes:
