@@ -24,7 +24,13 @@ The service rebuilt from scratch as 4Shadow v2, now on `main`. It has served api
 ### Changed
 
 - pygrib 2.1.8 (from 2.1.6), which has wheels for Linux on ARM and for Python 3.14. It writes the same store, byte for byte.
+- Pillow 12.3.0 (from 11.0.0), which has wheels for Python 3.14. Tiles have the same pixels and are about 3% smaller.
 - `requirements.txt` installs the forecast service. The experimental terrain engine has its own, in `terrain/requirements.txt`.
+
+### Fixed
+
+- Coordinates typed as a place (`q=`, the MCP `location`) are parsed in linear time. The old pattern backtracked polynomially on long runs of spaces, and the MCP `location` has no length limit, so one request could hold a worker for minutes.
+- The experimental terrain engine accepts only real job ids (uuid4 hex) in paths, so a crafted id can't name a folder outside its jobs folder.
 
 ### Removed
 
