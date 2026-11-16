@@ -142,13 +142,17 @@ def norm(text: str) -> str:
     return " ".join(unicodedata.normalize("NFC", "".join(out)).casefold().split())
 
 
+# Whitespace is collapsed before matching and the pattern allows at most one space at each point, so
+# a match takes linear time on any input (no backtracking over long runs of spaces).
 _COORDS = re.compile(
-    r"^\s*([-+]?\d{1,3}(?:\.\d+)?)\s*°?\s*([NSns])?\s*[,;\s]\s*([-+]?\d{1,3}(?:\.\d+)?)\s*°?\s*([EWew])?\s*$")
+    r"([-+]?\d{1,3}(?:\.\d+)?) ?(?:° ?)?([NSns])? ?(?:[,;] ?| )([-+]?\d{1,3}(?:\.\d+)?) ?(?:° ?)?([EWew])?")
 
 
 def parse_coordinates(text: str) -> tuple[float, float] | None:
     """'-8.556, 125.56', '48.85 2.35' or '48.85N 2.35E' -> (lat, lon); None if text isn't coordinates."""
-    m = _COORDS.match(text)
+    if len(text) > 100:  # coordinates are never this long; place names go to the index instead
+        return None
+    m = _COORDS.fullmatch(" ".join(text.split()))
     if not m:
         return None
     lat, ns, lon, ew = float(m.group(1)), m.group(2), float(m.group(3)), m.group(4)

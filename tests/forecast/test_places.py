@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from forecast.places import PlaceIndex, norm, parse_coordinates
@@ -29,8 +31,17 @@ def test_parse_coordinates():
     assert parse_coordinates("48.85 2.35") == (48.85, 2.35)
     assert parse_coordinates("48.85N, 2.35W") == (48.85, -2.35)
     assert parse_coordinates("8.5°S 125.5°E") == (-8.5, 125.5)
+    assert parse_coordinates("  48.85 °N ;\t2.35 °E ") == (48.85, 2.35)
     assert parse_coordinates("Paris") is None
     assert parse_coordinates("10 Downing Street") is None
+
+
+def test_parse_coordinates_is_fast_on_hostile_input():
+    # The old pattern backtracked polynomially over runs of spaces (CodeQL py/polynomial-redos).
+    started = time.perf_counter()
+    for text in ("1" + " " * 5000 + "x", "1" + " \t" * 40 + "x", "1" + " " * 90 + "x"):
+        assert parse_coordinates(text) is None
+    assert time.perf_counter() - started < 0.05
 
 
 def test_same_name_ranks_by_size_and_kind(index):
