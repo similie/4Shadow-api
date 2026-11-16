@@ -16,3 +16,4 @@ downloaded_index.json
 *.log.*
 .ruff_cache
 .mypy_cache
+.deploy
