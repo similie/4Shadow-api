@@ -1,7 +1,7 @@
 """Compatibility layer for clients of the retired v1 forecast service (temporary).
 
-The v1 service (``tile_renderers/``) is being shut down. This module serves v1's response
-shapes from the v2 store, so existing v1 clients keep working while they move to ``/v2``.
+The v1 service was retired in November 2026. This module serves v1's response shapes from
+the v2 store, so existing v1 clients keep working while they move to ``/v2``.
 The API-key router maps the public ``/v1/...`` routes to ``/legacy/v1/...`` here. Delete this
 module, its JSON file and its router rows once no client calls ``/v1``.
 

@@ -331,7 +331,7 @@ def build_server(stores: dict[str, RunStore], places: PlaceIndex | None = None) 
         except ForecastError as exc:
             raise _tool_error(exc) from exc
         zone, _ = resolve_timezone(where.lat, where.lon, timezone or None)
-        ts, units = body["timeseries"], body["units"]
+        ts = body["timeseries"]
         times = [_parse_iso(t) for t in ts["time"]]
         dt = [float(h) for h in ts["interval_hours"]]
         fhr = [round((t - r.init_time).total_seconds() / 3600) for t in times]

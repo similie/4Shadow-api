@@ -309,7 +309,7 @@ def check_thresholds(run: Run, cat: ModelCatalog, req: ThresholdRequest, now: da
     elif vt[-1] < now + timedelta(days=req.lead_days):
         warnings.append(f"Run {run.id} ends at {iso(vt[-1])}, before the end of the {req.lead_days:g}-day window")
 
-    series, stats_fn = [], []
+    series = []
     for c, v in zip(req.conditions, variables):
         vals = _values(run, cat, area, v)
         if c.accumulate_hours:

@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-4Shadow (Foreshadow) is a Python weather forecasting and terrain hydrology API built on FastAPI. It provides these services:
+4Shadow is an open-source (GPL-3.0) global weather forecast service in Python. The repository holds:
 
-1. **Forecast v2** (`forecast/`, port 5003 on the server) — the replacement for the GFS tile server. Global point forecasts and map tiles from NOAA GFS. New GFS work goes here, not in `tile_renderers/`. See `forecast/README.md`.
-2. **GFS Weather Tile Server v1** (`tile_renderers/`, `downloaders/`) — retired on 2026-11-12 and removed from the server on 2026-11-13. Public `/v1/...` routes are now served by `forecast/legacy_v1.py`. Don't change this code; it will be deleted.
-3. **Terrain Hydrology Engine** (port 5002) — Processes DEM elevation data to compute flood severity, landslide risk, and hydrological analysis via job-based processing
+1. **Forecast service** (`forecast/`, port 5003 on the server): ingests NOAA GFS and GFS-Wave into a compact store and serves point forecasts, map tiles, raw fields, place search, early-warning threshold checks and an MCP server under `/v2`. This is the product; it runs behind the API-key router at api.4shadow.io. See `forecast/README.md`.
+2. **Terrain hydrology engine** (`terrain/`, experimental, not deployed): flood and landslide indicators from DEMs and rainfall. See `terrain/README.md`; it has its own requirements (GDAL).
+
+v1 (`tile_renderers/`, `downloaders/`) was retired in November 2026 and removed from the repository; it remains in git history. `/v1` clients are served by `forecast/legacy_v1.py` until they move.
 
 ## Forecast v2 (`forecast/`)
 
@@ -27,99 +28,15 @@ pytest                                     # tests (pip install -r requirements-
 - **MCP** (`mcp_server.py`): forecast tools for AI assistants at `/v2/mcp` (official `mcp` SDK, stateless streamable HTTP, JSON responses). Tools wrap `service.point_forecast`, the same code as `GET /v2/forecast`. Keep tool parameters plain types with empty defaults (no `X | None`) and results compact Markdown; changing a tool's name, description or schema forces re-approval in Experts.
 - **Legacy** (`legacy_v1.py`): temporary v1-shaped endpoints under `/legacy/v1` for clients still calling `/v1` through the API-key router. Don't extend it; delete it when v1 traffic stops.
 
-## Running the Services
+## Checks
 
-### GFS Weather API
 ```bash
-# From repo root, activate venv then:
-cd tile_renderers && uvicorn main:app --host 0.0.0.0 --port 5001 --workers 4
+ruff check forecast tests      # lint (CI runs it)
+pytest                         # tests; no network or data needed
 ```
 
-### Terrain Hydrology API
-```bash
-uvicorn terrain.app:app --host 0.0.0.0 --port 5002 --reload
-```
+CI (`.github/workflows/ci.yml`) runs both on Python 3.12 and 3.13, builds the Docker image, and checks that it starts. pygrib has no Python 3.14 build yet.
 
-### Background Workers
-```bash
-# GFS data preloader (pre-caches interpolators into Redis)
-python -m tile_renderers.gfs_render.run_preloader
+## Deploying
 
-# Hydrology job worker (listens on Redis queue, processes jobs)
-python terrain/hydrology_worker.py
-
-# Hydrology cleanup worker (deletes expired job directories via Redis key expiry)
-python terrain/hydrology_cleanup_worker.py
-```
-
-### GFS Data Download
-```bash
-python downloaders/gfs-hourly-downloader.py [--date-offset N] [--no-cleanup]
-```
-
-### Terrain Preprocessing
-```bash
-# SRTM HGT → DEM + D8 flow directions + accumulation + reprojected rasters
-python -m terrain.preprocess --elevation data/elevation --output data/hydrology
-```
-
-## Environment Variables
-
-Set in a `.env` file at the repo root (auto-discovered via `python-dotenv`):
-- `GRIB_FILES_PATH` — Path to downloaded GRIB files (required for GFS service)
-- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB` — Redis connection (defaults: localhost:6379/0)
-- `HYDRO_WORKERS` — Number of hydrology worker processes (defaults to CPU count)
-
-## System Dependencies
-
-- Python 3.12+
-- GDAL 3.10.x (must be built from source with libeigen3-dev, libboost-all-dev, libpq-dev, cmake)
-- Redis (required for both services — caching, job queue, key expiry events)
-- `pip install -r requirements.txt` (within a venv at `.venv`)
-
-## Architecture
-
-### GFS Weather Service (`tile_renderers/`)
-
-The entry point is `tile_renderers/main.py` — a FastAPI app. On startup it initializes:
-- `RedisCacheBackend` — Redis-backed cache for tiles and interpolators
-- `LocalStorage` — In-process L2 cache
-- `ModelService` — Central orchestrator for GRIB file access, interpolator building/caching, and point forecasts
-- `TileRendering` — Renders 256x256 PNG weather tiles from interpolated GRIB data
-- `MemoryLayerCache` — Pre-warmed in-memory layer cache for rapid point forecasts
-
-**Key data flow for tile rendering:**
-`ModelService.get_or_build_interpolator()` → reads GRIB via pygrib → builds `LinearNDInterpolator` (scipy/Delaunay) → caches in Redis (pickled) with L2 local cache → `TileRendering.render_tile()` evaluates interpolator on Web Mercator grid points → colorizes via `MapColors` → returns PNG
-
-**Caching strategy:** Two-tier (local dict + Redis) with debounced writes to Redis. Interpolators are serialized with pickle protocol 4. Cache keys incorporate date/hour for time-based invalidation.
-
-**Supported models:** `gfs` (atmospheric) and `gfswave` (ocean waves), configured in `SystemConfig.MODEL_MAP`.
-
-### Terrain Hydrology Service (`terrain/`)
-
-The entry point is `terrain/app.py` — a separate FastAPI app that includes the `terrain.api.hydrology` router.
-
-**Job-based processing flow:**
-1. `POST /hydrology/jobs` creates a job → writes `job.json` to `data/hydrology_jobs/<id>/` → pushes job ID to Redis LIST `hydro:queue`
-2. `hydrology_worker.py` pops from `hydro:queue` via BLPOP and runs `process_job()`:
-   - Loads DEM + accumulation from `data/hydrology_copernicus/`
-   - Interpolates rainfall from station data → `rain_mm.tif`
-   - Computes runoff → discharge → `discharge_m3s.tif`
-   - Computes landslide indices (LSI base/trigger/hazard) → `lsi_*.tif`
-   - Computes flood severity index (FSI) → `fsi.tif`
-   - Updates job status in both `job.json` and Redis hash
-   - Publishes `hydro:events` Redis notification
-3. Tile requests (`GET /hydrology/jobs/{id}/tiles/{layer}/...`) warp source EPSG:4326 GeoTIFFs on-the-fly to EPSG:3857 via rasterio `WarpedVRT`, then colorize per layer
-
-**Base layers** (static, in `data/hydrology_copernicus/`): dem, d8_accum, lsi_base, slope_deg, twi, dist_to_channel_m
-**Job layers** (per-job, in `data/hydrology_jobs/<id>/`): rain_mm, discharge_m3s, fsi, lsi_trigger, lsi_hazard
-
-**Cleanup:** `hydrology_cleanup_worker.py` subscribes to Redis `__keyevent@0__:expired` events. When a `hydro:job:<id>` key expires (3h TTL), the corresponding job directory is deleted from disk.
-
-### Data Download (`downloaders/`)
-
-`gfs-hourly-downloader.py` pulls GFS GRIB2 files from NOAA's public S3 bucket (`noaa-gfs-bdp-pds`). Downloads run hours 00/06/12/18; hour 00 gets full forecast range (f000–f384), others get f000–f023. Old data is pruned after confirming complete 00-hour coverage.
-
-### Preprocessing Pipeline (`terrain/preprocess*.py`)
-
-Converts SRTM `.hgt` tiles or Copernicus DEM into hydrology-ready GeoTIFFs: DEM mosaic → D8 flow directions → flow accumulation → reprojection to EPSG:3857. Derivative layers (slope, TWI, distance-to-channel) are computed in `preprocess_derivatives.py`.
+`deploy/deploy.sh` updates a server checkout to the newest `main`: `status`, `update` (fast-forward, install requirements, import check, restart the API, restart ingest only if ingest code changed, smoke tests) and `rollback`. See `docs/deploy.md`. Production is `/root/foreshadow-v2` on 4shadow.io (a shared host: never disturb the other services).

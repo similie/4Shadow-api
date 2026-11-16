@@ -7,4 +7,4 @@ then serves point forecasts and map tiles straight from memory-mapped arrays.
     uvicorn forecast.api:app --port 5003        # serve /v2
 """
 
-__version__ = "2.0.0.dev0"
+__version__ = "2.0.0"

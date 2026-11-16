@@ -13,3 +13,6 @@ __pycache__
 *.log
 downloaded_index.json
 .pytest_cache
+*.log.*
+.ruff_cache
+.mypy_cache

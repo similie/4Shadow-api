@@ -22,9 +22,10 @@ pytest                                          # unit + API tests, no network n
 ```
 
 Production: `python -m forecast.ingest --loop` (see `deploy/forecast-ingest.service`) plus the
-API service (`deploy/forecast-api.service`). v2 has its own dependency set
-(`forecast/requirements.txt`); give it its own venv rather than sharing the v1/terrain one,
-which pins an older numpy for GDAL.
+API service (`deploy/forecast-api.service`); `deploy/deploy.sh` updates a server (see
+`docs/deploy.md`). The service's dependencies are `forecast/requirements.txt` (what the root
+`requirements.txt` installs); keep them in their own venv, apart from the experimental terrain
+engine's, which pins an older numpy for GDAL.
 
 ## API
 
