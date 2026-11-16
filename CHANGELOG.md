@@ -6,6 +6,10 @@ Notable changes to the forecast service. API answers only gain fields within a m
 
 ### Added
 
+- ECMWF's IFS, the European physics model, as `ifs` (00 and 12 UTC runs: 3-hourly to 6 days, then 6-hourly to 15 days, with sea state from ECMWF's wave model), and ECMWF's AI model AIFS Single as `aifs` (6-hourly to 15 days, four runs a day), from ECMWF's open data (CC BY 4.0). Same variable ids and units as GFS. Every answer from them carries ECMWF's attribution in `source.attribution`.
+- Air quality from NOAA's GEFS-Aerosols as `aerosols`: `pm25`, `pm10`, `dust`, `aod`, `dust_aod` and `smoke_aod` (from `aod_om` + `aod_bc`), every 3 hours to 5 days, with daily `pm25_mean`, `pm25_max`, `pm10_mean` and `aod_max`. PM tiles use the US AQI's categories and colours.
+- Settings `IFS_BASE_URL`, `AIFS_BASE_URL` and `AEROSOLS_BASE_URL`; `FORECAST_MODELS` defaults to all five models.
+- Sources can read other inventory formats (ECMWF's JSON-lines `.index`), select a message by the rest of its inventory line (an aerosol species), and turn a global field that starts at another longitude onto the stored grid.
 - AIGFS, NOAA's operational AI model built on Google DeepMind's GraphCast, as a second model: `/v2/aigfs/forecast`, and `/v2/aigfs/...` for runs, variables, tiles, fields and threshold checks. 6-hourly to 16 days, on the same 0.25° grid.
 - GFS variables: simulated radar reflectivity (`refc`), low, middle and high cloud (`lcc`, `mcc`, `hcc`), `freezing_level`, `frozen_precip`, `freezing_rain`, wind at 100 m (`u100`, `v100`), `soil_moisture`, `soil_moisture_10_40` and `soil_temp`.
 - Computed variables, for both models: `feels_like`, `heat_index`, `wet_bulb`, `vpd`, `fire_weather` (Fosberg index), and `wind_speed_100m`, `wind_dir_100m` and `wind_power_100m`. Daily summaries add `feels_like_max`, `feels_like_min`, `wet_bulb_max` and `fire_weather_max`.
@@ -19,7 +23,8 @@ Notable changes to the forecast service. API answers only gain fields within a m
 ### Changed
 
 - Plain-language descriptions for the older variables (temperature, dew point, humidity, wind, gusts, pressure, precipitation, cloud, CAPE, precipitable water, visibility, solar radiation, snow depth, wave period), with what typical values mean.
-- `/v2/health` reports `degraded` (HTTP 200) when GFS has a run but another model doesn't yet. It is still 503 only without a GFS run.
+- `/v2/health` reports `degraded` (HTTP 200) when GFS has a run but another model doesn't yet. It is still 503 only without a GFS run. A run is `stale` after a time that suits its model (GFS 12 h, AIGFS 18 h, IFS 24 h, AIFS and GEFS-Aerosols 15 h).
+- Daily summaries leave out a day that no forecast interval reaches, such as the run's last step falling on midnight; that day held a single value as its "daily" high and low.
 - The ingest loop reads each model in turn, with a lock per model.
 - `/v2/forecast` answers from GFS only. `model=gfs` still works there; another model answers 400 and names its path (`/v2/aigfs/forecast`). The parameter is no longer in the OpenAPI schema.
 - A full GFS run is about 15 GB on disk (was 9.5 GB) and about 4.5 GB to download (was 2.4 GB).

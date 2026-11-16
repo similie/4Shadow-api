@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from . import aigfs, gfs
+from . import aigfs, ecmwf, gefs_aerosols, gfs
 from .base import Source
 
-SOURCES: dict[str, Source] = {s.model: s for s in (gfs.SOURCE, aigfs.SOURCE)}
+SOURCES: dict[str, Source] = {s.model: s for s in (gfs.SOURCE, aigfs.SOURCE, ecmwf.IFS, ecmwf.AIFS, gefs_aerosols.SOURCE)}
 
 __all__ = ["SOURCES", "Source"]

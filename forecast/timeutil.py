@@ -70,6 +70,10 @@ def daily_aggregate(valid_times: list[datetime], forecast_hours: np.ndarray, ser
 
     days = sorted(set(inst_day.tolist()) | set(mid_day[has_interval].tolist()))
     hours_covered = [float(dt[has_interval & (mid_day == d)].sum()) for d in days]
+    # A day reached by no interval holds one instant at most, such as the last step landing on midnight:
+    # its "daily" maximum and minimum would be that single value. Leave it out (unless the run is one step).
+    if any(hours_covered):
+        days, hours_covered = [d for d, h in zip(days, hours_covered) if h], [h for h in hours_covered if h]
     out: dict[str, list] = {
         "date": [datetime.fromordinal(d).date().isoformat() for d in days],
         "hours_covered": hours_covered,

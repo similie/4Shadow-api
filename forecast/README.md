@@ -1,8 +1,9 @@
 # Foreshadow Forecast v2
 
 A forecast for any point on Earth, plus map tiles, from open numerical weather prediction
-data. Two models today: NOAA GFS 0.25°, with sea state from GFS-Wave, and NOAA AIGFS, NOAA's AI
-model. The store and API are model-agnostic.
+data. Five models today: NOAA GFS 0.25° with sea state from GFS-Wave, NOAA's AI model AIGFS, ECMWF's
+IFS (with sea state) and AI model AIFS, and NOAA GEFS-Aerosols for air quality. The store and API are
+model-agnostic, and every model is stored on the same 0.25° grid.
 
 ```
 NOAA S3 (.idx + byte ranges) ──► ingest ──► data/forecast/gfs/runs/<run>/*.npy ──► API (/v2)
@@ -87,11 +88,21 @@ Semantics worth knowing:
 |---|---|---|---|
 | `gfs` | NOAA's Global Forecast System, physics-based, with GFS-Wave sea state | Hourly to 5 days, then 3-hourly to 16 days | All 45 below |
 | `aigfs` | NOAA's operational AI model (since December 2025), built on Google DeepMind's GraphCast and started from NOAA's analyses | 6-hourly to 16 days | Temperature, dew point and humidity, 10 m and 100 m wind (from the first forecast step; the analysis has none), pressure, precipitation, and the indices computed from them. Its land mask and terrain height come from GFS |
+| `ifs` | ECMWF's Integrated Forecasting System, the European physics model, from its 00 and 12 UTC runs, with sea state from ECMWF's wave model | 3-hourly to 6 days, then 6-hourly to 15 days | Temperature, dew point and humidity, 10 m and 100 m wind, the 10 m gust (strongest in the hour before), pressure, precipitation, total/low/middle/high cloud, CAPE (most unstable), precipitable water, solar radiation, soil moisture and temperature (0-7 cm), wave height, period and direction, and the indices. Its own land mask and terrain height |
+| `aifs` | ECMWF's AI model, AIFS Single, four runs a day | 6-hourly to 15 days | As IFS without gusts, CAPE, precipitable water and sea state |
+| `aerosols` | NOAA GEFS-Aerosols: air quality from NOAA's global aerosol model (GEFS v12 with GOCART), with fires from satellite detections | 3-hourly to 5 days, four runs a day | PM2.5, PM10, dust, and haze (aerosol optical depth) in total and from dust and smoke. See *Air quality* below |
 
-Both are on the same 0.25° grid and arrive about four times a day: GFS about 5 hours after each run
-starts, AIGFS on NOAA's AWS bucket about 8 hours after. With 6-hourly steps, AIGFS's daily highs and
-lows are of four values a day and can miss the peak. Its source files list fewer fields than GFS's
-and NCEP says their contents may change; a field missing from a step's file is left empty there.
+GFS arrives about 5 hours after each run starts, AIGFS on NOAA's AWS bucket about 8 hours after, IFS's
+last step about 7.5 hours after (twice a day), AIFS and GEFS-Aerosols about 6 hours after. ECMWF also
+publishes IFS runs at 06 and 18 UTC, but only to 6 days, so the newest IFS run is always a 15-day one.
+With 6-hourly steps, AIGFS's and AIFS's daily highs and lows are of four values a day and can miss the
+peak. AIGFS's source files list fewer fields than GFS's and NCEP says their contents may change; a field
+missing from a step's file is left empty there. A variable has the same id, units and meaning in every
+model that has it, so `t2m` or `precip` can be compared across models.
+
+ECMWF's files start at 180° and list each message in a JSON-lines `.index`
+(`forecast/sources/ecmwf.py`); the ingest turns each field to start at 0° like GFS's. Their unit
+factors differ by model: IFS gives precipitation in metres and cloud as 0-1, AIFS in kg/m² and %.
 
 ## Variables
 
@@ -122,8 +133,24 @@ Computed when read (no storage, and available in tiles and threshold checks like
 | `vpd` | Vapour pressure deficit, kPa | Saturation vapour pressure (Bolton 1980) times (1 - RH) |
 | `fire_weather` | Fosberg fire weather index, 0-100. Land only: tiles, fields and area checks leave water empty | Fosberg (1978), from temperature, humidity and the 10 m wind, capped at 100 |
 
-AIGFS has no stored humidity, so its `rh2m` and the indices use the dew point. Daily summaries add
-`feels_like_max`, `feels_like_min`, `wet_bulb_max` and `fire_weather_max`.
+AIGFS, IFS and AIFS have no stored humidity, so their `rh2m` and the indices use the dew point. Daily
+summaries add `feels_like_max`, `feels_like_min`, `wet_bulb_max` and `fire_weather_max`.
+
+### Air quality (`aerosols`)
+
+| Id | | Source (GEFS-Aerosols `a2d_0p25`) |
+|---|---|---|
+| `pm25` | PM2.5 near the ground, µg/m³. Tiles use the US AQI's categories and colours | `PMTF` surface, total aerosol |
+| `pm10` | PM10 near the ground, µg/m³ | `PMTC` surface, total aerosol |
+| `dust` | Dust under 10 µm near the ground, µg/m³ | `PMTC` surface, dust |
+| `aod` | Haze: aerosol optical depth at 550 nm | `AOTK` total aerosol at 545-565 nm |
+| `dust_aod` | The part of the haze from dust | `AOTK` dust |
+| `smoke_aod` | The part from smoke (computed: organic matter + black carbon, `aod_om` + `aod_bc`, both stored) | `AOTK` organic matter, black carbon |
+
+Several messages in these files share a parameter and level and differ only in the species and size
+the inventory line names, so these variables also match it (`Variable.grib_extra`). The model has no
+nitrate or ozone, and as a 25 km average it misses sources a street away; the variable descriptions say
+so. Daily summaries: `pm25_mean`, `pm25_max`, `pm10_mean`, `aod_max`.
 
 **Fields** are the numbers behind the tiles, for clients that render, animate or analyse the data
 themselves (WebGL colour layers, wind particles, isobars). `vars` takes up to 4 variables, stored
@@ -234,12 +261,14 @@ int16 `[step, lat, lon]` with `value = raw * scale + offset` (`-32768` = missing
 can read it: `np.load("t2m.npy", mmap_mode="r")`. Runs are written to `<run>.incoming/`
 and renamed into place, then `latest.json` is replaced atomically, so readers never see a
 partial run. The newest `FORECAST_KEEP_RUNS` runs are kept (default 2). A full GFS run with sea
-state is about 15 GB, and an AIGFS run about 1.2 GB.
+state is about 15 GB, an IFS run about 3.8 GB, an AIFS run 2 GB, an AIGFS run 1.2 GB and a GEFS-Aerosols
+run 0.6 GB (about 2 MB per variable and step).
 
 ## Adding a variable
 
 Add a `Variable` to `forecast/catalog.py` with the GRIB abbreviation and level text exactly
-as they appear in the NOAA `.idx` files (e.g. `TMP` / `2 m above ground`), its `kind`
+as they appear in the NOAA `.idx` files (e.g. `TMP` / `2 m above ground`; for ECMWF, the short name and
+level type from its `.index`, e.g. `2t` / `sfc` or `vsw` / `sol:1`), its `kind`
 (`instant`, `accum` for running totals, `average` for bucket means), unit conversion,
 storage quantum and an optional palette. The next ingested run includes it. Set `product="wave"`
 for a GFS-Wave field (`gfswave.tCCz.global.0p25.fFFF.grib2`); a missing wave file leaves its
@@ -251,7 +280,9 @@ they decode at about 0.14 s per field (about 3 minutes per full run for the seve
 A model needs a source (`forecast/sources/`: its grid, steps, file names and attribution) and a
 catalog (`forecast/catalog.py`), registered in `sources.SOURCES` and `catalog.CATALOGS` under the same
 id, and added to `config.KNOWN_MODELS`. Sources that publish NCEP-style GRIB2 with `.idx` files use
-the existing client unchanged; `forecast/sources/aigfs.py` is the example. The API serves every model
+the existing client unchanged; `forecast/sources/aigfs.py` is the example. Another inventory format
+sets `index_url` and `parse_index` on the source (`forecast/sources/ecmwf.py`), and a global field on
+the same grid spacing that starts at another longitude is turned at decoding. The API serves every model
 in `FORECAST_MODELS` under `/v2/{model}/...` (its point forecast at `/v2/{model}/forecast`), and the ingest reads them one after the other.
 
 ## Configuration
@@ -259,9 +290,11 @@ in `FORECAST_MODELS` under `/v2/{model}/...` (its point forecast at `/v2/{model}
 | Env var | Default | |
 |---|---|---|
 | `FORECAST_DATA_ROOT` | `<repo>/data/forecast` | Store location |
-| `FORECAST_MODELS` | `gfs,aigfs` | Models to serve and ingest. GFS is always included |
+| `FORECAST_MODELS` | `gfs,aigfs,ifs,aifs,aerosols` | Models to serve and ingest. GFS is always included |
 | `GFS_BASE_URL` | NOAA's bucket on AWS | Where GFS comes from (a mirror, for example) |
 | `AIGFS_BASE_URL` | NOAA's bucket on AWS | Where AIGFS comes from; NOMADS is earlier but rate-limited |
+| `IFS_BASE_URL`, `AIFS_BASE_URL` | ECMWF's Google Cloud mirror | Where ECMWF's open data comes from; also on AWS (`https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com`) and at `https://data.ecmwf.int/forecasts` |
+| `AEROSOLS_BASE_URL` | NOAA's bucket on AWS | Where GEFS-Aerosols comes from |
 | `FORECAST_KEEP_RUNS` | `2` | Published runs to keep |
 | `FORECAST_MAX_FHR` | `384` | Last forecast hour to ingest |
 | `FORECAST_DOWNLOAD_WORKERS` | `6` | Concurrent step downloads |
@@ -280,5 +313,9 @@ JSON file and the router rows once no client calls `/v1`.
 
 GFS and GFS-Wave data: NOAA/NCEP, public domain, distributed through the NOAA Open Data
 Dissemination program on AWS (`noaa-gfs-bdp-pds`). AIGFS data: NOAA/NCEP, based on Google
-DeepMind's GraphCast; NOAA releases its products under CC0 (`noaa-nws-graphcastgfs-pds`). Place names: GeoNames (geonames.org), licensed under
+DeepMind's GraphCast; NOAA releases its products under CC0 (`noaa-nws-graphcastgfs-pds`). GEFS-Aerosols
+data: NOAA/NCEP, public domain (`noaa-gefs-pds`). IFS and AIFS data: © European Centre for
+Medium-Range Weather Forecasts (ECMWF), open data under CC BY 4.0; 4Shadow converts units, turns
+totals into rates and derives further variables, and every answer from these models carries the
+attribution in `source.attribution`. Place names: GeoNames (geonames.org), licensed under
 CC BY 4.0; responses that use them say so.

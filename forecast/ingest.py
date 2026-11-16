@@ -1,11 +1,11 @@
-"""Ingest model runs (GFS, AIGFS) into the array store.
+"""Ingest model runs (GFS, AIGFS, ECMWF IFS and AIFS, GEFS-Aerosols) into the array store.
 
     python -m forecast.ingest                    # each model's newest complete run, if it's new
     python -m forecast.ingest --loop             # ...and keep doing so (systemd service)
     python -m forecast.ingest --model aigfs      # one model only
     python -m forecast.ingest --run 2026111200 --max-fhr 48   # a specific run / dev slice
 
-Models come from FORECAST_MODELS (default: gfs,aigfs) and are ingested one after the other, one run
+Models come from FORECAST_MODELS (default: all of them) and are ingested one after the other, one run
 at a time each (guarded by a lock file per model). Downloads are prefetched in a small thread pool;
 decoding happens sequentially in step order because ecCodes is not thread-safe and because
 de-accumulating precipitation needs the previous step anyway.
@@ -109,12 +109,12 @@ def download_step(client: GribClient, catalog: ModelCatalog, run: datetime, fhr:
 
         wanted: dict[str, tuple[IdxRecord, FcstSpec]] = {}
         for var in catalog.stored_variables():
-            if var.product != product:
-                continue
-            hit = gfs.select_record(records, var.grib_param, var.grib_level, var.kind, fhr)
+            if var.product != product or (fhr == 0 and var.kind != "instant"):
+                continue  # a total or mean over the time before the run started is nothing (ECMWF lists a 0)
+            hit = gfs.select_record(records, var.grib_param, var.grib_level, var.kind, fhr, var.grib_extra)
             if hit is None:
-                if not (fhr == 0 and var.kind != "instant"):
-                    log.warning("%s f%03d: no %s:%s message", run_id(run), fhr, var.grib_param, var.grib_level)
+                log.warning("%s f%03d: no %s:%s%s message", run_id(run), fhr, var.grib_param, var.grib_level,
+                            f" ({var.grib_extra})" if var.grib_extra else "")
                 continue
             wanted[var.id] = hit
         static_wanted: dict[str, IdxRecord] = {}
@@ -190,7 +190,10 @@ def process_step(writer: RunWriter, catalog: ModelCatalog, step: int, payload: S
         writer.write(var.id, step, values)
     for sid, blob in payload.static.items():
         sf = catalog.static[sid]
-        writer.write_static(sid, gfs.decode_message(blob, writer.grid), {"name": sf.name, "units": sf.units})
+        values = gfs.decode_message(blob, writer.grid)
+        if sf.mul != 1.0:
+            values = values * np.float32(sf.mul)
+        writer.write_static(sid, values, {"name": sf.name, "units": sf.units})
 
 
 def client_for(settings: Settings, model: str) -> GribClient:

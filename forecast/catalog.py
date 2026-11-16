@@ -18,12 +18,15 @@ Derived variables (heat index, wet-bulb temperature, fire weather, wind power...
 they are read, from stored ones, so they cost no storage and work everywhere a stored variable does:
 point forecasts, tiles and threshold checks. Their formulas are in ``derive`` below.
 
-Each model has its own catalog: GFS, and AIGFS (NOAA's AI model, fewer variables, 6-hourly).
+Each model has its own catalog: GFS; AIGFS (NOAA's AI model, fewer variables, 6-hourly); IFS and AIFS
+(ECMWF's physics and AI models, from its open data); and GEFS-Aerosols (air quality). A variable keeps
+the same id, units and meaning in every model that has it, so clients can ask any model for ``t2m``.
+For ECMWF's files the GRIB selector is its short name (``2t``) and level type (``sfc``, ``sol:1``).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -40,6 +43,8 @@ class Variable:
     kind: str = "instant"  # instant | accum | average  (how the source stores it)
     grib_param: str | None = None
     grib_level: str | None = None
+    # The rest of the inventory line, when several messages share a param and level (an aerosol species).
+    grib_extra: str | None = None
     mul: float = 1.0  # unit conversion applied at ingest: value * mul + add
     add: float = 0.0
     clip: tuple[float | None, float | None] = (None, None)
@@ -95,6 +100,7 @@ class StaticField:
     units: str
     grib_param: str
     grib_level: str
+    mul: float = 1.0  # unit conversion at ingest, e.g. geopotential to height
 
 
 @dataclass(frozen=True)
@@ -205,6 +211,8 @@ def derive(var_id: str, inputs: dict[str, np.ndarray]) -> np.ndarray:
         return (saturation_vapour_pressure(t) * (1.0 - _rh(inputs) / 100.0) / 10.0).astype(np.float32)
     if var_id == "fire_weather":
         return fosberg(inputs["t2m"], _rh(inputs), _speed(inputs["u10"], inputs["v10"]))
+    if var_id == "smoke_aod":
+        return (inputs["aod_om"] + inputs["aod_bc"]).astype(np.float32)
     raise KeyError(var_id)
 
 
@@ -461,6 +469,10 @@ GFS = ModelCatalog(
     ),
 )
 
+# Relative humidity for models that store the dew point instead.
+AIGFS_RH = Variable("rh2m", "Relative humidity (2 m)", "%", "Relative humidity 2 m above ground, from the dew point.",
+                    derived_from=("t2m", "d2m"), decimals=0, palette=palettes.RELATIVE_HUMIDITY)
+
 AIGFS = ModelCatalog(
     model="aigfs",
     title="NOAA AIGFS 0.25° (AI)",
@@ -470,8 +482,7 @@ AIGFS = ModelCatalog(
     variables=_vars(
         GFS.variables["t2m"],
         GFS.variables["d2m"],
-        Variable("rh2m", "Relative humidity (2 m)", "%", "Relative humidity 2 m above ground, from the dew point.",
-                 derived_from=("t2m", "d2m"), decimals=0, palette=palettes.RELATIVE_HUMIDITY),
+        AIGFS_RH,
         *(GFS.variables[v] for v in ("u10", "v10", "wind_speed", "wind_dir")),
         *_wind_100m(),
         *(GFS.variables[v] for v in ("mslp", "sp", "precip")),
@@ -487,4 +498,175 @@ AIGFS = ModelCatalog(
     ),
 )
 
-CATALOGS: dict[str, ModelCatalog] = {c.model: c for c in (GFS, AIGFS)}
+# --------------------------------------------------------------------------- ECMWF IFS and AIFS
+#
+# The same variables as GFS where ECMWF publishes them, read from its short names. Totals since the run
+# started (precipitation, sunshine) become rates over each step like GFS's. Units differ between the two
+# ECMWF models' files: IFS gives precipitation in metres and cloud as 0-1, AIFS in kg/m² (mm) and %.
+
+G = 9.80665  # m/s², to turn geopotential into height
+
+
+def _ecmwf(var_id: str, param: str, level: str = "sfc", **changes) -> Variable:
+    """A GFS variable read from ECMWF's files: same id, units and palette."""
+    return replace(GFS.variables[var_id], grib_param=param, grib_level=level, **changes)
+
+
+_ECMWF_SOIL = (
+    _ecmwf("soil_moisture", "vsw", "sol:1", name="Soil moisture (0-7 cm)", valid=(0.001, 0.99),
+           description="Water in the top 7 cm of soil (ECMWF's first soil layer) as a fraction of its volume: about "
+                       "0.05 is very dry and 0.4-0.5 saturated for most soils. Land only (empty on water and ice sheets)."),
+    _ecmwf("soil_temp", "sot", "sol:1", name="Soil temperature (0-7 cm)",
+           description="Temperature of the top 7 cm of soil (ECMWF's first soil layer). Land only."),
+)
+
+
+def _ecmwf_common(precip_mul: float, cloud_mul: float) -> tuple[Variable, ...]:
+    """What both ECMWF models publish, with each model's unit factors for precipitation and cloud."""
+    return (
+        _ecmwf("t2m", "2t"),
+        _ecmwf("d2m", "2d"),
+        AIGFS_RH,
+        _ecmwf("u10", "10u"),
+        _ecmwf("v10", "10v"),
+        GFS.variables["wind_speed"],
+        GFS.variables["wind_dir"],
+        _ecmwf("u100", "100u"),
+        _ecmwf("v100", "100v"),
+        *(GFS.variables[v] for v in ("wind_speed_100m", "wind_dir_100m", "wind_power_100m")),
+        _ecmwf("mslp", "msl"),
+        _ecmwf("sp", "sp"),
+        _ecmwf("precip", "tp", mul=precip_mul),  # total since the start -> mm, then mm/h over each step
+        *(_ecmwf(c, c, mul=cloud_mul) for c in ("tcc", "lcc", "mcc", "hcc")),
+        # J/m² since the start -> mean W/m² over each step.
+        _ecmwf("dswrf", "ssrd", kind="accum", mul=1.0 / 3600.0),
+        *_ECMWF_SOIL,
+    )
+
+
+_ECMWF_STATIC = {
+    "orog": StaticField("orog", "Model surface elevation", "m", "z", "sfc", mul=1.0 / G),
+    "land": StaticField("land", "Land fraction", "1", "lsm", "sfc"),
+}
+
+IFS = ModelCatalog(
+    model="ifs",
+    title="ECMWF IFS 0.25°",
+    description=("ECMWF's Integrated Forecasting System, the European physics model, from its 00 and 12 UTC runs: "
+                 "3-hourly steps to 6 days, then 6-hourly to 15 days, with sea state from ECMWF's wave model. "
+                 "ECMWF open data, CC BY 4.0."),
+    variables=_vars(
+        *_ecmwf_common(precip_mul=1000.0, cloud_mul=100.0),  # m, 0-1
+        _ecmwf("gust", "10fg",
+               description="The strongest few-second gust near the ground in the hour before this time: what breaks "
+                           "branches and lifts roofs. Often half as strong again as the mean wind, or more."),
+        _ecmwf("cape", "mucape",
+               description="Energy available to the most unstable rising air: the fuel for thunderstorms. Above about "
+                           "1000 J/kg storms can be strong if something sets them off, above about 2500 J/kg severe; near "
+                           "zero the air is stable."),
+        _ecmwf("pwat", "tcwv"),
+        _ecmwf("wave_height", "swh", product="wave"),
+        _ecmwf("wave_period", "pp1d", product="wave",
+               description="Time between the crests of the most energetic waves (the peak period). 12 s or more is "
+                           "powerful swell from far away; under 8 s choppy local wind waves. Open sea only."),
+        _ecmwf("wave_dir", "mwd", product="wave",
+               description="Mean direction the waves come from, clockwise from north. Open sea only."),
+        *_comfort_and_fire("d2m"),
+    ),
+    static=_ECMWF_STATIC,
+    daily=(
+        DailySpec("t2m_max", "t2m", "max", "°C"),
+        DailySpec("t2m_min", "t2m", "min", "°C"),
+        DailySpec("precip_sum", "precip", "sum", "mm", decimals=1),
+        DailySpec("wind_speed_max", "wind_speed", "max", "m/s"),
+        DailySpec("gust_max", "gust", "max", "m/s"),
+        DailySpec("rh2m_mean", "rh2m", "mean", "%", decimals=0),
+        DailySpec("tcc_mean", "tcc", "mean", "%", decimals=0),
+        DailySpec("dswrf_sum", "dswrf", "sum", "MJ/m²", factor=0.0036, decimals=1),
+        DailySpec("wave_height_max", "wave_height", "max", "m"),
+        *_daily_comfort_and_fire(),
+    ),
+)
+
+AIFS = ModelCatalog(
+    model="aifs",
+    title="ECMWF AIFS 0.25° (AI)",
+    description=("ECMWF's AI model (AIFS Single), trained on ECMWF's reanalysis and started from its analyses, run four "
+                 "times a day: 6-hourly steps to 15 days, so daily highs and lows come from four values a day and can miss "
+                 "the peak. No gusts, CAPE or sea state. ECMWF open data, CC BY 4.0."),
+    variables=_vars(*_ecmwf_common(precip_mul=1.0, cloud_mul=1.0), *_comfort_and_fire("d2m")),  # kg/m², %
+    static=_ECMWF_STATIC,
+    daily=(
+        DailySpec("t2m_max", "t2m", "max", "°C"),
+        DailySpec("t2m_min", "t2m", "min", "°C"),
+        DailySpec("precip_sum", "precip", "sum", "mm", decimals=1),
+        DailySpec("wind_speed_max", "wind_speed", "max", "m/s"),
+        DailySpec("rh2m_mean", "rh2m", "mean", "%", decimals=0),
+        DailySpec("tcc_mean", "tcc", "mean", "%", decimals=0),
+        DailySpec("dswrf_sum", "dswrf", "sum", "MJ/m²", factor=0.0036, decimals=1),
+        *_daily_comfort_and_fire(),
+    ),
+)
+
+
+# --------------------------------------------------------------------------- GEFS-Aerosols (air quality)
+
+_FINE, _COARSE = "aerosol_size <2.5e-06", "aerosol_size <1e-05"
+_AOD_550 = "aerosol_size <2e-05:aerosol_wavelength >=5.45e-07,<=5.65e-07"
+_AQ_NOTE = (" A global model's average over a 25 km cell: it misses sources a city block away, such as traffic and "
+            "cooking fires, and has no nitrate or ozone.")
+
+AEROSOLS = ModelCatalog(
+    model="aerosols",
+    title="NOAA GEFS-Aerosols 0.25° (air quality)",
+    description=("Air quality from NOAA's global aerosol model: particles near the ground (PM2.5, PM10) and haze from "
+                 "dust, sea salt, sulphate and smoke, every 3 hours to 5 days, four runs a day. Fires come from "
+                 "satellite fire detections."),
+    variables=_vars(
+        Variable("pm25", "PM2.5", "µg/m³",
+                 "Fine particles under 2.5 µm in the air near the ground: smoke, dust, sea salt and sulphate haze, the "
+                 "particles that harm health most. The WHO's 24-hour guideline is 15 µg/m³; on the US Air Quality Index "
+                 "over 35 is unhealthy for sensitive groups and over 55 unhealthy." + _AQ_NOTE,
+                 grib_param="PMTF", grib_level="surface", grib_extra=f"aerosol=Total aerosol:{_FINE}",
+                 clip=(0, None), scale=0.1, decimals=0, palette=palettes.PM25_UGM3),
+        Variable("pm10", "PM10", "µg/m³",
+                 "Particles under 10 µm in the air near the ground, including coarse dust and sea salt. The WHO's 24-hour "
+                 "guideline is 45 µg/m³; on the US Air Quality Index over 154 is unhealthy for sensitive groups." + _AQ_NOTE,
+                 grib_param="PMTC", grib_level="surface", grib_extra=f"aerosol=Total aerosol:{_COARSE}",
+                 clip=(0, None), scale=0.5, decimals=0, palette=palettes.PM10_UGM3),
+        Variable("dust", "Dust (PM10)", "µg/m³",
+                 "Mineral dust under 10 µm in the air near the ground, as in a desert dust storm or the Harmattan.",
+                 grib_param="PMTC", grib_level="surface", grib_extra=f"aerosol=Dust dry:{_COARSE}",
+                 clip=(0, None), scale=0.5, decimals=0, palette=palettes.PM10_UGM3),
+        Variable("aod", "Haze (aerosol optical depth)", "1",
+                 "How much the particles in the whole air column dim sunlight (aerosol optical depth at 550 nm): about 0.1 "
+                 "is clear air, 0.3 visible haze, 1 or more a thick pall of dust or smoke.",
+                 grib_param="AOTK", grib_level="entire atmosphere", grib_extra=f"aerosol=Total aerosol:{_AOD_550}",
+                 clip=(0, None), scale=0.001, decimals=2, palette=palettes.AEROSOL_OPTICAL_DEPTH),
+        Variable("dust_aod", "Dust haze", "1", "The part of the haze (aerosol optical depth at 550 nm) made by dust.",
+                 grib_param="AOTK", grib_level="entire atmosphere", grib_extra=f"aerosol=Dust dry:{_AOD_550}",
+                 clip=(0, None), scale=0.001, decimals=2, palette=palettes.AEROSOL_OPTICAL_DEPTH),
+        Variable("aod_om", "Organic matter haze", "1",
+                 "Aerosol optical depth at 550 nm of organic matter, mostly smoke from fires.",
+                 grib_param="AOTK", grib_level="entire atmosphere",
+                 grib_extra=f"aerosol=Particulate organic matter dry:{_AOD_550}", clip=(0, None), scale=0.001, decimals=2),
+        Variable("aod_bc", "Black carbon haze", "1",
+                 "Aerosol optical depth at 550 nm of black carbon (soot), from fires and burning fuel.",
+                 grib_param="AOTK", grib_level="entire atmosphere", grib_extra=f"aerosol=Black carbon dry:{_AOD_550}",
+                 clip=(0, None), scale=0.001, decimals=2),
+        Variable("smoke_aod", "Smoke haze", "1",
+                 "The part of the haze (aerosol optical depth at 550 nm) made by smoke: organic matter and black carbon, "
+                 "mostly from fires.",
+                 derived_from=("aod_om", "aod_bc"), decimals=2, palette=palettes.AEROSOL_OPTICAL_DEPTH),
+    ),
+    daily=(
+        DailySpec("pm25_mean", "pm25", "mean", "µg/m³", decimals=0),
+        DailySpec("pm25_max", "pm25", "max", "µg/m³", decimals=0),
+        DailySpec("pm10_mean", "pm10", "mean", "µg/m³", decimals=0),
+        DailySpec("aod_max", "aod", "max", "1", decimals=2),
+    ),
+)
+
+
+CATALOGS: dict[str, ModelCatalog] = {c.model: c for c in (GFS, AIGFS, IFS, AIFS, AEROSOLS)}
+
