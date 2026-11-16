@@ -1,0 +1,29 @@
+# Foreshadow v2 API (point forecasts + tiles; also serves the legacy /v1 shapes under /legacy/v1).
+#   sudo cp deploy/forecast-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now forecast-api
+#
+# Public traffic reaches it through the API-key router (api.4shadow.io -> routing-manager
+# container -> http://host.docker.internal:5003), so it binds 0.0.0.0; the
+# port itself must not be reachable from the internet. Check it is free first
+# (ss -ltnp | grep 5003). Workers memory-map the store, so they share one copy of the data
+# through the page cache. Pinned-run tile URLs are immutable, so a CDN/nginx cache helps.
+
+[Unit]
+Description=Foreshadow v2 forecast API
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/foreshadow-v2
+EnvironmentFile=-/root/foreshadow-v2/.env
+ExecStart=/root/foreshadow-v2/.venv/bin/uvicorn forecast.api:app --host 0.0.0.0 --port 5003 --workers 4
+Restart=always
+RestartSec=5
+CPUQuota=400%
+MemoryHigh=3G
+MemoryMax=6G
+StandardOutput=append:/root/foreshadow-v2/forecast-api.log
+StandardError=append:/root/foreshadow-v2/forecast-api.log
+
+[Install]
+WantedBy=multi-user.target

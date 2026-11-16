@@ -6,8 +6,14 @@ cached_data
 output.*
 output_tiles
 grib
+data
 __pycache__
 .ropeproject
 .env
 *.log
 downloaded_index.json
+.pytest_cache
+*.log.*
+.ruff_cache
+.mypy_cache
+.deploy

@@ -1,0 +1,13 @@
+# The forecast service's runtime dependencies (the root requirements.txt installs these). The
+# experimental terrain engine has its own set, in terrain/requirements.txt.
+numpy==2.5.4
+pygrib==2.1.8
+fastapi==0.162.5
+starlette==1.10.0
+pydantic==2.14.3
+uvicorn==0.54.0
+mcp==2.3.0
+pillow==12.3.0
+requests==2.32.3
+python-dotenv==1.1.0
+timezonefinder==9.2.0
