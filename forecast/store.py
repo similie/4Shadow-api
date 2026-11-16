@@ -154,6 +154,16 @@ class RunWriter:
         np.save(self.dir / "static" / f"{name}.npy", np.asarray(values, dtype=np.float32))
         self._static[name] = {**meta, "file": f"static/{name}.npy"}
 
+    def copy_static_from(self, run: "Run", note: str) -> list[str]:
+        """Take another run's static fields (land mask, terrain height) when this model has none of its
+        own and the grids match: AIGFS uses GFS's. Returns the names copied."""
+        if run.grid != self.grid:
+            return []
+        for name, meta in run.static_meta.items():
+            self.write_static(name, np.asarray(run.static(name)), {**{k: v for k, v in meta.items() if k != "file"},
+                                                                   "from": note})
+        return list(run.static_meta)
+
     def _close(self) -> None:
         for arr in self._arrays.values():
             arr.flush()
@@ -321,6 +331,20 @@ class Run:
         j0, j1, wj = (np.asarray(a).item() for a in self.grid.col_weights(lon))
         v = bilinear(*(np.float32(field[a, b]) for a, b in ((i0, j0), (i0, j1), (i1, j0), (i1, j1))), wi, wj)
         return None if np.isnan(v) else float(v)
+
+    def land_mask(self, rows=None, cols=None) -> np.ndarray | None:
+        """True where land is the larger part of the cell (the static land fraction is at least 0.5),
+        bilinear between cells for pixel grids (rows/cols weights), or None without a land field."""
+        land = self.static("land")
+        if land is None:
+            return None
+        if rows is None:
+            return np.asarray(land) >= 0.5
+        i0, i1, wi = rows
+        j0, j1, wj = cols
+        r0, r1, c0, c1 = i0[:, None], i1[:, None], j0[None, :], j1[None, :]
+        f = bilinear(land[r0, c0], land[r0, c1], land[r1, c0], land[r1, c1], wi[:, None], wj[None, :])
+        return f >= 0.5
 
     def sample_field(self, var_id: str, step: int, rows, cols) -> np.ndarray:
         """Bilinear sample of one step on a separable pixel grid (rows x cols)."""

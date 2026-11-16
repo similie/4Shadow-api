@@ -1,8 +1,8 @@
 # Foreshadow Forecast v2
 
 A forecast for any point on Earth, plus map tiles, from open numerical weather prediction
-data. Today the source is NOAA GFS 0.25°, with sea state from GFS-Wave; the store and API are
-model-agnostic.
+data. Two models today: NOAA GFS 0.25°, with sea state from GFS-Wave, and NOAA AIGFS, NOAA's AI
+model. The store and API are model-agnostic.
 
 ```
 NOAA S3 (.idx + byte ranges) ──► ingest ──► data/forecast/gfs/runs/<run>/*.npy ──► API (/v2)
@@ -38,11 +38,11 @@ engine's, which pins an older numpy for GDAL.
 | `GET /v2/{model}/variables` | Variable catalog with units and legend colour stops |
 | `GET /v2/{model}/runs`, `/v2/{model}/runs/{run}` | Available runs and their valid times |
 | `POST /v2/{model}/thresholds` | Early-warning check: when an area meets conditions in a run (internal; see below) |
-| `GET /v2/health` | Latest run per model and its age (503 if none) |
+| `GET /v2/health` | Latest run per model and its age: `ok`, `degraded` (GFS is in, another model isn't yet), or `unavailable` with 503 (no GFS run) |
 | `POST /v2/mcp` | MCP server for AI assistants (see below) |
 
 **Forecast parameters**: `lat` and `lon`, or `q` (a place name such as `Paris, France`; the best
-match is used), `vars` (comma list, default all), `hours` (default 384),
+match is used), `model` (`gfs`, the default, or `aigfs`), `vars` (comma list, default all), `hours` (default 384),
 `start=now|run`, `tz` (IANA name; default looked up from the coordinates), `run`
 (`latest` or `YYYYMMDDHH`), `daily=true|false`.
 
@@ -80,9 +80,53 @@ Semantics worth knowing:
   `swell_height` are 0 at sea when the model finds no wind sea or swell (their period and
   direction are then `null`).
 
+## Models
+
+| Model | What it is | Steps | Variables |
+|---|---|---|---|
+| `gfs` | NOAA's Global Forecast System, physics-based, with GFS-Wave sea state | Hourly to 5 days, then 3-hourly to 16 days | All 45 below |
+| `aigfs` | NOAA's operational AI model (since December 2025), built on Google DeepMind's GraphCast and started from NOAA's analyses | 6-hourly to 16 days | Temperature, dew point and humidity, 10 m and 100 m wind (from the first forecast step; the analysis has none), pressure, precipitation, and the indices computed from them. Its land mask and terrain height come from GFS |
+
+Both are on the same 0.25° grid and arrive about four times a day: GFS about 5 hours after each run
+starts, AIGFS on NOAA's AWS bucket about 8 hours after. With 6-hourly steps, AIGFS's daily highs and
+lows are of four values a day and can miss the peak. Its source files list fewer fields than GFS's
+and NCEP says their contents may change; a field missing from a step's file is left empty there.
+
+## Variables
+
+`GET /v2/{model}/variables` lists each model's variables with units, a description and the legend.
+Besides the basics (temperature, humidity, wind, gusts, pressure, precipitation, cloud, CAPE,
+precipitable water, visibility, solar radiation, snow depth and sea state), GFS has:
+
+| Id | | Source |
+|---|---|---|
+| `refc` | Simulated radar reflectivity, dBZ: the strongest echo in the column | GFS `REFC` |
+| `lcc`, `mcc`, `hcc` | Low, middle and high cloud cover, % | GFS `LCDC`, `MCDC`, `HCDC` |
+| `freezing_level` | Height of the 0 °C level, m above sea level | GFS `HGT` at the 0C isotherm |
+| `frozen_precip` | Share of precipitation falling frozen, %; `null` where none falls | GFS `CPOFP` (-50, "none", stored as missing) |
+| `freezing_rain` | 1 where freezing rain is expected, else 0 | GFS `CFRZR` |
+| `u100`, `v100` | Wind at 100 m, m/s | GFS `UGRD`/`VGRD` at 100 m |
+| `soil_moisture`, `soil_moisture_10_40` | Volumetric soil water at 0-10 and 10-40 cm, m³/m³; land only | GFS `SOILW` (1.0 on ice sheets is stored as missing) |
+| `soil_temp` | Soil temperature at 0-10 cm, °C; the ice's temperature on ice sheets. Land only | GFS `TSOIL` |
+
+Computed when read (no storage, and available in tiles and threshold checks like any other):
+
+| Id | | Formula |
+|---|---|---|
+| `wind_speed_100m`, `wind_dir_100m` | Wind speed and direction at 100 m | From `u100`, `v100` |
+| `wind_power_100m` | Wind power density at 100 m, W/m² | ½ρv³, with the air density from surface pressure and temperature |
+| `heat_index` | Heat index, °C | US National Weather Service (Rothfusz regression and its adjustments) |
+| `feels_like` | Feels-like temperature, °C | Heat index from 26.7 °C, wind chill (Environment Canada/NWS 2001, 10 m wind) at 10 °C and below, else the air temperature |
+| `wet_bulb` | Wet-bulb temperature, °C | Stull (2011), at sea-level pressure; within about 1 °C |
+| `vpd` | Vapour pressure deficit, kPa | Saturation vapour pressure (Bolton 1980) times (1 - RH) |
+| `fire_weather` | Fosberg fire weather index, 0-100. Land only: tiles, fields and area checks leave water empty | Fosberg (1978), from temperature, humidity and the 10 m wind, capped at 100 |
+
+AIGFS has no stored humidity, so its `rh2m` and the indices use the dew point. Daily summaries add
+`feels_like_max`, `feels_like_min`, `wet_bulb_max` and `fire_weather_max`.
+
 **Fields** are the numbers behind the tiles, for clients that render, animate or analyse the data
-themselves (WebGL colour layers, wind particles, isobars). `vars` takes up to 4 stored variables
-(`u10,v10`, not the derived `wind_speed`), `stride` thins the grid (1 = 0.25°, 2 = 0.5°, 4 = 1°) and
+themselves (WebGL colour layers, wind particles, isobars). `vars` takes up to 4 variables, stored
+(`u10,v10`) or computed (`wet_bulb`, `fire_weather`: worked out on the requested cells), `stride` thins the grid (1 = 0.25°, 2 = 0.5°, 4 = 1°) and
 `bbox=west,south,east,north` crops it (east < west crosses the antimeridian); the default is the
 whole globe, starting at -180. The body is format "4SF1": `"4SF1"`, a uint32 LE header length, a
 JSON header (grid, valid time, per-variable units/scale/offset), then one int16 LE array per
@@ -188,8 +232,8 @@ int16 `[step, lat, lon]` with `value = raw * scale + offset` (`-32768` = missing
 `manifest.json` describing the grid, steps, valid times, units and scale/offset. Anything
 can read it: `np.load("t2m.npy", mmap_mode="r")`. Runs are written to `<run>.incoming/`
 and renamed into place, then `latest.json` is replaced atomically, so readers never see a
-partial run. The newest `FORECAST_KEEP_RUNS` runs are kept (default 2, about 9.5 GB each for GFS
-with sea state).
+partial run. The newest `FORECAST_KEEP_RUNS` runs are kept (default 2). A full GFS run with sea
+state is about 15 GB, and an AIGFS run about 1.2 GB.
 
 ## Adding a variable
 
@@ -201,11 +245,22 @@ for a GFS-Wave field (`gfswave.tCCz.global.0p25.fFFF.grib2`); a missing wave fil
 variables empty for that step instead of failing the run. Wave files are JPEG 2000 packed, so
 they decode at about 0.14 s per field (about 3 minutes per full run for the seven wave fields).
 
+## Adding a model
+
+A model needs a source (`forecast/sources/`: its grid, steps, file names and attribution) and a
+catalog (`forecast/catalog.py`), registered in `sources.SOURCES` and `catalog.CATALOGS` under the same
+id, and added to `config.KNOWN_MODELS`. Sources that publish NCEP-style GRIB2 with `.idx` files use
+the existing client unchanged; `forecast/sources/aigfs.py` is the example. The API serves every model
+in `FORECAST_MODELS` under `/v2/{model}/...` and `?model=`, and the ingest reads them one after the other.
+
 ## Configuration
 
 | Env var | Default | |
 |---|---|---|
 | `FORECAST_DATA_ROOT` | `<repo>/data/forecast` | Store location |
+| `FORECAST_MODELS` | `gfs,aigfs` | Models to serve and ingest. GFS is always included |
+| `GFS_BASE_URL` | NOAA's bucket on AWS | Where GFS comes from (a mirror, for example) |
+| `AIGFS_BASE_URL` | NOAA's bucket on AWS | Where AIGFS comes from; NOMADS is earlier but rate-limited |
 | `FORECAST_KEEP_RUNS` | `2` | Published runs to keep |
 | `FORECAST_MAX_FHR` | `384` | Last forecast hour to ingest |
 | `FORECAST_DOWNLOAD_WORKERS` | `6` | Concurrent step downloads |
@@ -223,5 +278,6 @@ JSON file and the router rows once no client calls `/v1`.
 ## Data attribution
 
 GFS and GFS-Wave data: NOAA/NCEP, public domain, distributed through the NOAA Open Data
-Dissemination program on AWS (`noaa-gfs-bdp-pds`). Place names: GeoNames (geonames.org), licensed under
+Dissemination program on AWS (`noaa-gfs-bdp-pds`). AIGFS data: NOAA/NCEP, based on Google
+DeepMind's GraphCast; NOAA releases its products under CC0 (`noaa-nws-graphcastgfs-pds`). Place names: GeoNames (geonames.org), licensed under
 CC BY 4.0; responses that use them say so.

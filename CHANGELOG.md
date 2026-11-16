@@ -4,6 +4,24 @@ Notable changes to the forecast service. API answers only gain fields within a m
 
 ## Unreleased
 
+### Added
+
+- AIGFS, NOAA's operational AI model built on Google DeepMind's GraphCast, as a second model: `model=aigfs` on `/v2/forecast`, and `/v2/aigfs/...` for runs, variables, tiles, fields and threshold checks. 6-hourly to 16 days, on the same 0.25° grid.
+- GFS variables: simulated radar reflectivity (`refc`), low, middle and high cloud (`lcc`, `mcc`, `hcc`), `freezing_level`, `frozen_precip`, `freezing_rain`, wind at 100 m (`u100`, `v100`), `soil_moisture`, `soil_moisture_10_40` and `soil_temp`.
+- Computed variables, for both models: `feels_like`, `heat_index`, `wet_bulb`, `vpd`, `fire_weather` (Fosberg index), and `wind_speed_100m`, `wind_dir_100m` and `wind_power_100m`. Daily summaries add `feels_like_max`, `feels_like_min`, `wet_bulb_max` and `fire_weather_max`.
+- `/v2/{model}/variables` gives the model's `title` and `description`.
+- `/v2/{model}/fields` serves computed variables too (`wet_bulb`, `fire_weather`, `wind_speed`...), worked out on the requested cells; their header entry lists `derived_from`.
+- Settings `FORECAST_MODELS` (default `gfs,aigfs`) and `AIGFS_BASE_URL`; `python -m forecast.ingest --model`.
+- `fire_weather`, `soil_moisture`, `soil_moisture_10_40` and `soil_temp` are land-only (`land_only` in `/v2/{model}/variables`): tiles, fields and area threshold checks leave water empty, by the model's land mask; point forecasts keep the value, so a coastal town gets one.
+- AIGFS runs take the land mask and terrain height from the GFS run on the same grid, as AIGFS publishes neither.
+
+### Changed
+
+- Plain-language descriptions for the older variables (temperature, dew point, humidity, wind, gusts, pressure, precipitation, cloud, CAPE, precipitable water, visibility, solar radiation, snow depth, wave period), with what typical values mean.
+- `/v2/health` reports `degraded` (HTTP 200) when GFS has a run but another model doesn't yet. It is still 503 only without a GFS run.
+- The ingest loop reads each model in turn, with a lock per model.
+- A full GFS run is about 15 GB on disk (was 9.5 GB) and about 4.5 GB to download (was 2.4 GB).
+
 ## 2.0.0 (2026-11-16)
 
 The service rebuilt from scratch as 4Shadow v2, now on `main`. It has served api.4shadow.io since 2026-11-12.

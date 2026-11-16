@@ -1,12 +1,14 @@
-"""Ingest GFS runs into the array store.
+"""Ingest model runs (GFS, AIGFS) into the array store.
 
-    python -m forecast.ingest                    # ingest the newest complete run if it's new
+    python -m forecast.ingest                    # each model's newest complete run, if it's new
     python -m forecast.ingest --loop             # ...and keep doing so (systemd service)
+    python -m forecast.ingest --model aigfs      # one model only
     python -m forecast.ingest --run 2026111200 --max-fhr 48   # a specific run / dev slice
 
-One process, one run at a time (guarded by a lock file). Downloads are prefetched in a
-small thread pool; decoding happens sequentially in step order because ecCodes is not
-thread-safe and because de-accumulating precipitation needs the previous step anyway.
+Models come from FORECAST_MODELS (default: gfs,aigfs) and are ingested one after the other, one run
+at a time each (guarded by a lock file per model). Downloads are prefetched in a small thread pool;
+decoding happens sequentially in step order because ecCodes is not thread-safe and because
+de-accumulating precipitation needs the previous step anyway.
 """
 
 from __future__ import annotations
@@ -24,11 +26,11 @@ from pathlib import Path
 
 import numpy as np
 
-from .catalog import GFS, ModelCatalog, Variable
+from .catalog import CATALOGS, GFS, ModelCatalog, Variable
 from .config import Settings, get_settings
-from .sources import gfs
-from .sources.gfs import FcstSpec, GfsClient, IdxRecord
-from .store import RunWriter, parse_run_id, prune_runs, read_latest, run_id
+from .sources import SOURCES, gfs
+from .sources.gfs import FcstSpec, GribClient, IdxRecord
+from .store import RunStore, RunWriter, parse_run_id, prune_runs, read_latest, run_id
 
 log = logging.getLogger("forecast.ingest")
 
@@ -79,7 +81,7 @@ class IntervalState:
 # --------------------------------------------------------------------------- download
 
 
-def _wait_for_idx(client: GfsClient, run: datetime, fhr: int, product: str,
+def _wait_for_idx(client: GribClient, run: datetime, fhr: int, product: str,
                   deadline: float) -> list[IdxRecord] | None:
     while True:
         records = client.idx(run, fhr, product)
@@ -88,7 +90,7 @@ def _wait_for_idx(client: GfsClient, run: datetime, fhr: int, product: str,
         time.sleep(30)
 
 
-def download_step(client: GfsClient, catalog: ModelCatalog, run: datetime, fhr: int,
+def download_step(client: GribClient, catalog: ModelCatalog, run: datetime, fhr: int,
                   include_static: bool, wait_seconds: int = 0) -> StepPayload:
     """Fetch one step's messages from each product's file.
 
@@ -142,6 +144,17 @@ def _convert(var: Variable, values: np.ndarray) -> np.ndarray:
     return values
 
 
+def _mask(var: Variable, values: np.ndarray) -> np.ndarray:
+    """Missing outside the variable's valid range: a source's "no data" codes, such as -50% frozen
+    precipitation where none falls, or soil moisture 1.0 on ice sheets."""
+    lo, hi = var.valid
+    if lo is not None:
+        values = np.where(values < lo, np.float32(np.nan), values)
+    if hi is not None:
+        values = np.where(values > hi, np.float32(np.nan), values)
+    return values
+
+
 def _clip(var: Variable, values: np.ndarray) -> np.ndarray:
     lo, hi = var.clip
     if lo is not None or hi is not None:
@@ -164,7 +177,7 @@ def process_step(writer: RunWriter, catalog: ModelCatalog, step: int, payload: S
             writer.write(var.id, step, None)
             continue
         spec, blob = item
-        values = _convert(var, gfs.decode_message(blob, writer.grid))
+        values = _mask(var, _convert(var, gfs.decode_message(blob, writer.grid)))
         if var.kind == "accum":
             values = states[var.id].accum(payload.fhr, values)
         elif var.kind == "average":
@@ -180,19 +193,30 @@ def process_step(writer: RunWriter, catalog: ModelCatalog, step: int, payload: S
         writer.write_static(sid, gfs.decode_message(blob, writer.grid), {"name": sf.name, "units": sf.units})
 
 
-def ingest_run(run: datetime, settings: Settings, client: GfsClient | None = None,
+def client_for(settings: Settings, model: str) -> GribClient:
+    source = SOURCES[model]
+    return GribClient(settings.base_url(model) or source.default_base_url, source=source)
+
+
+def _hours(settings: Settings, model: str, max_fhr: int | None) -> int:
+    """The last forecast hour to ingest: the request, else FORECAST_MAX_FHR, within the model's range."""
+    return min(settings.max_fhr if max_fhr is None else max_fhr, SOURCES[model].max_fhr)
+
+
+def ingest_run(run: datetime, settings: Settings, client: GribClient | None = None,
                catalog: ModelCatalog = GFS, max_fhr: int | None = None) -> str:
-    client = client or GfsClient(settings.gfs_base_url)
-    hours = gfs.forecast_hours(settings.max_fhr if max_fhr is None else max_fhr)
+    source = SOURCES[catalog.model]
+    client = client or client_for(settings, catalog.model)
+    hours = source.forecast_hours(_hours(settings, catalog.model, max_fhr))
     model_root = settings.data_root / catalog.model
     stored = catalog.stored_variables()
-    writer = RunWriter(model_root, catalog.model, run, gfs.GRID, hours, stored,
-                       source=gfs.source_info(client.base_url, run, catalog.products()))
-    states = {v.id: IntervalState(gfs.GRID.shape) for v in stored if v.interval}
+    writer = RunWriter(model_root, catalog.model, run, source.grid, hours, stored,
+                       source=source.source_info(client.base_url, run, catalog.products()))
+    states = {v.id: IntervalState(source.grid.shape) for v in stored if v.interval}
     log.info("Ingesting %s run %s: %d steps x %d variables", catalog.model, writer.id, len(hours), len(stored))
 
     t0 = time.monotonic()
-    pool = ThreadPoolExecutor(max_workers=max(1, settings.download_workers), thread_name_prefix="gfs-dl")
+    pool = ThreadPoolExecutor(max_workers=max(1, settings.download_workers), thread_name_prefix=f"{catalog.model}-dl")
     try:
         futures: dict[int, Future] = {}
         depth = max(2, settings.download_workers * 2)
@@ -216,6 +240,12 @@ def ingest_run(run: datetime, settings: Settings, client: GfsClient | None = Non
                 log.info("  f%03d done (%d/%d, %.0fs elapsed, %.0fs decoding)", fhr, k + 1, len(hours),
                          time.monotonic() - t0, decode_s)
         pool.shutdown(wait=True)
+        if not catalog.static and catalog.model != GFS.model:
+            gfs_run = RunStore(settings.data_root, GFS.model).get()
+            copied = writer.copy_static_from(gfs_run, f"gfs run {gfs_run.id}") if gfs_run else []
+            if not copied:
+                log.warning("%s run %s has no land mask or terrain height: no GFS run on the same grid to take them from",
+                            catalog.model, writer.id)
         writer.publish(keep_runs=settings.keep_runs, extra={"ingest_seconds": round(time.monotonic() - t0, 1)})
     except BaseException:
         pool.shutdown(wait=False, cancel_futures=True)
@@ -225,10 +255,10 @@ def ingest_run(run: datetime, settings: Settings, client: GfsClient | None = Non
     return writer.id
 
 
-def ingest_latest(settings: Settings, client: GfsClient | None = None, catalog: ModelCatalog = GFS,
+def ingest_latest(settings: Settings, client: GribClient | None = None, catalog: ModelCatalog = GFS,
                   max_fhr: int | None = None, force: bool = False) -> str | None:
-    client = client or GfsClient(settings.gfs_base_url)
-    max_fhr = settings.max_fhr if max_fhr is None else max_fhr
+    client = client or client_for(settings, catalog.model)
+    max_fhr = _hours(settings, catalog.model, max_fhr)
     candidate = client.latest_complete_run(max_fhr=max_fhr)
     if candidate is None:
         log.warning("No complete %s run found on %s", catalog.model, client.base_url)
@@ -257,7 +287,8 @@ def ingest_lock(model_root: Path):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Ingest GFS runs into the forecast store.")
+    parser = argparse.ArgumentParser(description="Ingest model runs into the forecast store.")
+    parser.add_argument("--model", choices=sorted(CATALOGS), help="only this model (default: FORECAST_MODELS)")
     parser.add_argument("--run", help="ingest this run (YYYYMMDDHH) instead of the newest complete one")
     parser.add_argument("--max-fhr", type=int, help="last forecast hour to ingest (default: FORECAST_MAX_FHR or 384)")
     parser.add_argument("--loop", action="store_true", help="keep polling for new runs")
@@ -267,25 +298,28 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = get_settings()
-    model_root = settings.data_root / GFS.model
-    with ingest_lock(model_root) as acquired:
-        if not acquired:
-            log.warning("Another ingest is running for %s; exiting", model_root)
-            return 0
-        if args.run:
-            ingest_run(parse_run_id(args.run), settings, max_fhr=args.max_fhr)
-            return 0
-        while True:
-            try:
-                ingest_latest(settings, max_fhr=args.max_fhr, force=args.force)
-                prune_runs(model_root, settings.keep_runs)
-            except Exception:
-                log.exception("Ingest cycle failed")
-                if not args.loop:
-                    return 1
-            if not args.loop:
-                return 0
-            time.sleep(args.poll)
+    models = [args.model] if args.model else list(settings.models)
+    failed = False
+    while True:
+        for model in models:
+            catalog, model_root = CATALOGS[model], settings.data_root / model
+            with ingest_lock(model_root) as acquired:
+                if not acquired:
+                    log.warning("Another ingest is running for %s; skipping it", model_root)
+                    continue
+                try:
+                    if args.run:
+                        ingest_run(parse_run_id(args.run), settings, catalog=catalog, max_fhr=args.max_fhr)
+                    else:
+                        ingest_latest(settings, catalog=catalog, max_fhr=args.max_fhr, force=args.force)
+                    prune_runs(model_root, settings.keep_runs)
+                except Exception:
+                    log.exception("%s ingest failed", model)
+                    failed = True
+        if args.run or not args.loop:
+            return 1 if failed else 0
+        failed = False
+        time.sleep(args.poll)
 
 
 if __name__ == "__main__":

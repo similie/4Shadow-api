@@ -3,16 +3,16 @@
 Two ways to run a server that keeps itself current: **systemd** on a Linux host (what api.4shadow.io runs), or **Docker Compose**. Both run the same two processes:
 
 - **The API** (`uvicorn forecast.api:app`), stateless; it reads the store.
-- **The ingest** (`python -m forecast.ingest --loop`), which checks for a new GFS run every 10 minutes and publishes each complete run.
+- **The ingest** (`python -m forecast.ingest --loop`), which checks every 10 minutes for a new run of each model (GFS, then AIGFS) and publishes each complete run.
 
 ## What it needs
 
-| | Full service (every step to 16 days, sea state, worldwide places) | Trying it out (`--max-fhr 24`, cities500) |
+| | Full service (both models, every step to 16 days, sea state, worldwide places) | Trying it out (`--max-fhr 24`, cities500) |
 | --- | --- | --- |
-| Disk | 40 GB: two published runs of about 9.5 GB, one run being written, and a 1.3 GB place index | 3 GB |
+| Disk | 60 GB: two published GFS runs of about 15 GB, one being written, three AIGFS runs of about 1.2 GB, and a 1.3 GB place index | 4 GB |
 | Memory | 8 GB. The workers memory-map the store, so more memory means more of it stays in the page cache | 2 GB |
 | CPU | 2 cores or more. Ingest uses one, for several minutes per run | 1 core |
-| Download | About 2.4 GB per run, four runs a day, from NOAA's open data on AWS (free) | 300 MB once |
+| Download | About 4.5 GB per GFS run and 0.5 GB per AIGFS run, four runs a day each, from NOAA's open data on AWS (free) | 600 MB once |
 | Python | 3.12, 3.13 or 3.14. pygrib's wheels include ecCodes, so there is nothing else to install | |
 
 The API has no authentication of its own. Keep its port private and put something in front that decides who may call it: a reverse proxy for your own apps, or an API-key gateway for a public service.
@@ -126,7 +126,7 @@ server {
 
 ## Monitoring
 
-`GET /v2/health` returns 200 with each model's latest run and its age, `stale: true` when the newest run is more than 12 hours old, and 503 when no run is published. GFS runs start every 6 hours (00, 06, 12 and 18 UTC) and are published a few hours later, once every step is in. If runs stop arriving, `forecast-ingest.log` says why (NOAA delays, a missing file, disk space).
+`GET /v2/health` returns each model's latest run and its age, with `stale: true` when the newest run is more than 12 hours old. Its `status` is `ok` when every model has a run, `degraded` (still 200) when GFS has one but another model doesn't yet, and `unavailable` with a 503 when there is no GFS run. GFS runs start every 6 hours (00, 06, 12 and 18 UTC) and are published a few hours later, once every step is in. If runs stop arriving, `forecast-ingest.log` says why (NOAA delays, a missing file, disk space).
 
 ## Settings
 
@@ -135,10 +135,12 @@ Environment variables, from the unit's `EnvironmentFile` (`.env` in the checkout
 | Variable | Default | |
 | --- | --- | --- |
 | `FORECAST_DATA_ROOT` | `<checkout>/data/forecast` | Where runs are stored |
+| `FORECAST_MODELS` | `gfs,aigfs` | Models to serve and ingest; `gfs` alone skips AIGFS. GFS is always included |
 | `FORECAST_KEEP_RUNS` | `2` | Published runs to keep |
 | `FORECAST_MAX_FHR` | `384` | Last forecast hour to ingest |
 | `FORECAST_DOWNLOAD_WORKERS` | `6` | Steps downloaded at once |
 | `FORECAST_STEP_WAIT_SECONDS` | `0` | Pause between steps, to spread the load |
 | `GFS_BASE_URL` | `https://noaa-gfs-bdp-pds.s3.amazonaws.com` | Where GFS comes from (a mirror, for example) |
+| `AIGFS_BASE_URL` | `https://noaa-nws-graphcastgfs-pds.s3.amazonaws.com` | Where AIGFS comes from. NOMADS (`https://nomads.ncep.noaa.gov/pub/data/nccf/com/aigfs/prod`) has it a few hours earlier but limits request rates |
 | `FORECAST_TILE_CACHE_SIZE` | `4096` | Rendered tiles kept in memory per worker |
 | `FORECAST_PLACES_DB` | `<checkout>/data/places/places.sqlite` | The place index |

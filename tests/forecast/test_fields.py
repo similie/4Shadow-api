@@ -58,8 +58,8 @@ def test_field_errors(client):
     def status(**params):
         return client.get("/v2/gfs/fields/latest/f000", params=params)
 
-    r = status(vars="wind_speed")
-    assert r.status_code == 400 and "computed from u10, v10" in r.json()["detail"]
+    r = status(vars="no_such")
+    assert r.status_code == 400 and "wet_bulb" in r.json()["detail"]  # lists what is available
     assert status(vars="u10,v10,t2m,mslp,gust").status_code == 400
     assert status(vars="t2m", bbox="1,2,3").status_code == 400
     assert status(vars="t2m", stride=0).status_code == 422

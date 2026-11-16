@@ -153,3 +153,69 @@ WAVE_PERIOD_S = Palette(
         (12, "#d9d94a"), (14, "#f2a33a"), (16, "#e0562c"), (18, "#b3245a"), (22, "#6a1f6b"),
     )
 )
+
+# Simulated radar, in the colours weather radar displays use; below 10 dBZ (drizzle, cloud) is not shown.
+REFLECTIVITY_DBZ = Palette(
+    (
+        (10, "#019ff4"), (15, "#0300f4"), (20, "#02fd02"), (25, "#01c501"), (30, "#008e00"),
+        (35, "#fdf802"), (40, "#e5bc00"), (45, "#fd9500"), (50, "#fd0000"), (55, "#d40000"),
+        (60, "#bc0000"), (65, "#f800fd"), (70, "#9854c6"),
+    ),
+    transparent_below=10,
+)
+
+FREEZING_LEVEL_M = Palette(
+    (
+        (0, "#6a51a3"), (500, "#3a6fc9"), (1000, "#4fb3e8"), (2000, "#7fd6c2"), (3000, "#e6e65c"),
+        (4000, "#f39b2f"), (5000, "#c41f2a"), (6000, "#6a0f3f"),
+    )
+)
+
+# Share of precipitation that is frozen: rain blue through mixed violet to snow white; nothing where dry.
+FROZEN_PCT = Palette(((0, "#3a97c9"), (40, "#6a6fd1"), (60, "#b18cd9"), (100, "#f0e6ff")))
+
+FREEZING_RAIN = Palette(((0.5, "#d7307dcc"), (1, "#d7307dff")), transparent_below=0.5)
+
+SOIL_MOISTURE = Palette(
+    (
+        (0.02, "#8a4b1c"), (0.08, "#c47a2c"), (0.15, "#e0b96b"), (0.22, "#e8e8a6"), (0.28, "#a6d88a"),
+        (0.34, "#4fb08a"), (0.40, "#3c8ad8"), (0.48, "#1f3fa3"),
+    )
+)
+
+# Heat index, by the US National Weather Service's categories (caution 27 °C, extreme caution 32,
+# danger 39, extreme danger 52). Below caution is not shown.
+HEAT_INDEX_C = Palette(
+    (
+        (27, "#f6e27f"), (32, "#f7b346"), (39, "#e3542b"), (46, "#c41f2a"), (52, "#8e0f3f"), (60, "#4a0a2e"),
+    ),
+    transparent_below=26,
+)
+
+WET_BULB_C = Palette(
+    (
+        (0, "#3a6fc9"), (10, "#4fb3e8"), (16, "#7fd6c2"), (20, "#a3dc7a"), (24, "#e6e65c"), (26, "#f7c843"),
+        (28, "#f39b2f"), (30, "#e3542b"), (31, "#c41f2a"), (33, "#8e0f3f"), (35, "#4a0a2e"),
+    )
+)
+
+VPD_KPA = Palette(
+    (
+        (0, "#1f3fa3"), (0.4, "#3c9ad8"), (0.8, "#7fc97f"), (1.2, "#e8e8a6"), (2, "#e0b96b"),
+        (3, "#c47a2c"), (4.5, "#8a4b1c"), (6, "#4a2a10"),
+    )
+)
+
+FIRE_WEATHER = Palette(
+    (
+        (0, "#1a9850"), (10, "#66bd63"), (20, "#d9ef8b"), (30, "#fee08b"), (40, "#fdae61"),
+        (50, "#f46d43"), (65, "#d73027"), (80, "#a50026"), (100, "#4a0010"),
+    )
+)
+
+WIND_POWER_WM2 = Palette(
+    (
+        (0, "#2b1d4f"), (100, "#3a4fa8"), (200, "#2f86c4"), (400, "#3fb0a8"), (600, "#7ccc6a"),
+        (800, "#d9d94a"), (1200, "#f2a33a"), (2000, "#e0562c"), (4000, "#6a1f6b"),
+    )
+)
