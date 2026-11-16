@@ -64,6 +64,8 @@ class JobStatusResponse(BaseModel):
 # ---------------------------------------------------------------------
 @router.get("/jobs/{job_id}/tiles/{layer}/{z}/{x}/{y}.png")
 def get_tile(job_id: str, layer: str, z: int, x: int, y: int, request: Request):
+    if not job_engine.valid_job_id(job_id):
+        raise HTTPException(404, "Job not found")
     # We ignore z/x/y for warping, because WMS passes explicit bbox/size/srs.
     # Still useful for caching keys/logging.
 

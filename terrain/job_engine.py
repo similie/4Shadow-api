@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +14,8 @@ import redis
 from terrain.utils.redis_notifications import ensure_expired_events_enabled
 
 from .utils.station_normalization import StationDict, normalize_station_dict
+
+_JOB_ID = re.compile(r"[0-9a-f]{32}")
 
 
 @dataclass
@@ -72,8 +76,19 @@ class HydrologyJobEngine:
     # ------------------------------
     # Disk paths
     # ------------------------------
+    @staticmethod
+    def valid_job_id(job_id: str) -> bool:
+        """Job ids are uuid4 hex (see _new_job_id). Anything else could name a path outside jobs_root."""
+        return bool(_JOB_ID.fullmatch(job_id))
+
     def _job_path(self, job_id: str) -> Path:
-        return self.jobs_root / job_id
+        if not self.valid_job_id(job_id):
+            raise FileNotFoundError(f"No job {job_id!r}")
+        root = os.path.normpath(self.jobs_root)
+        path = os.path.normpath(os.path.join(root, job_id))
+        if not path.startswith(root + os.sep):
+            raise FileNotFoundError(f"No job {job_id!r}")
+        return Path(path)
 
     # ------------------------------
     # Public API

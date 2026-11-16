@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 from pathlib import Path
@@ -84,6 +85,8 @@ for message in p.listen():
     print(f"FOUND AND EXPIRED KEY {expired_key}")
 
     job_id = expired_key.split(":")[-1]
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):  # only ever a uuid4 hex id; never a path
+        continue
     job_path = JOBS_DIR / job_id
 
     if job_path.exists():
