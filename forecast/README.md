@@ -31,7 +31,8 @@ engine's, which pins an older numpy for GDAL.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /v2/forecast?lat&lon` or `?q=` | Point forecast: `current`, `timeseries`, local-day `daily` |
+| `GET /v2/forecast?lat&lon` or `?q=` | Point forecast: `current`, `timeseries`, local-day `daily` (GFS) |
+| `GET /v2/{model}/forecast?lat&lon` or `?q=` | The same from another model: `/v2/aigfs/forecast` |
 | `GET /v2/places?q=` or `?lat&lon` | Place search: names to coordinates, or the nearest towns to a point |
 | `GET /v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png` | XYZ map tiles |
 | `GET /v2/{model}/fields/{run}/{time}?vars=u10,v10` | Raw gridded values (binary) for client-side rendering |
@@ -251,7 +252,7 @@ A model needs a source (`forecast/sources/`: its grid, steps, file names and att
 catalog (`forecast/catalog.py`), registered in `sources.SOURCES` and `catalog.CATALOGS` under the same
 id, and added to `config.KNOWN_MODELS`. Sources that publish NCEP-style GRIB2 with `.idx` files use
 the existing client unchanged; `forecast/sources/aigfs.py` is the example. The API serves every model
-in `FORECAST_MODELS` under `/v2/{model}/...` and `?model=`, and the ingest reads them one after the other.
+in `FORECAST_MODELS` under `/v2/{model}/...` (its point forecast at `/v2/{model}/forecast`), and the ingest reads them one after the other.
 
 ## Configuration
 
