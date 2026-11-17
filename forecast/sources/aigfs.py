@@ -50,4 +50,5 @@ def source_info(base_url: str, run: datetime, products=("atmos",)) -> dict:
     }
 
 
-SOURCE = Source("aigfs", GRID, MAX_FHR, DEFAULT_BASE_URL, forecast_hours, file_url, source_info)
+SOURCE = Source("aigfs", GRID, MAX_FHR, DEFAULT_BASE_URL, forecast_hours, file_url, source_info,
+                stale_after_hours=18)  # 6-hourly, last step on AWS 8-11 h after the run starts

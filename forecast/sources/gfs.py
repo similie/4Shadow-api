@@ -62,7 +62,8 @@ def source_info(base_url: str, run: datetime, products=("atmos",)) -> dict:
     return info
 
 
-SOURCE = Source("gfs", GRID, MAX_FHR, DEFAULT_BASE_URL, forecast_hours, file_url, source_info, CYCLE_HOURS)
+SOURCE = Source("gfs", GRID, MAX_FHR, DEFAULT_BASE_URL, forecast_hours, file_url, source_info, CYCLE_HOURS,
+                stale_after_hours=12)
 
 
 # --------------------------------------------------------------------------- .idx parsing
@@ -76,6 +77,9 @@ class IdxRecord:
     param: str
     level: str
     fcst: str
+    # What else the line says about the message, e.g. GEFS-Aerosols' "aerosol=Dust dry:aerosol_size
+    # <2.5e-06": several messages share a param and level and differ only here.
+    extra: str = ""
 
 
 @dataclass(frozen=True)
@@ -95,12 +99,12 @@ def parse_idx(text: str) -> list[IdxRecord]:
         parts = line.split(":")
         if len(parts) < 6 or not parts[0].isdigit():
             continue
-        rows.append((int(parts[0]), int(parts[1]), parts[3], parts[4], parts[5]))
+        rows.append((int(parts[0]), int(parts[1]), parts[3], parts[4], parts[5], ":".join(parts[6:]).strip(": ")))
     rows.sort()
     out = []
-    for k, (num, start, param, level, fcst) in enumerate(rows):
+    for k, (num, start, param, level, fcst, extra) in enumerate(rows):
         end = rows[k + 1][1] - 1 if k + 1 < len(rows) else None
-        out.append(IdxRecord(num, start, end, param, level, fcst))
+        out.append(IdxRecord(num, start, end, param, level, fcst, extra))
     return out
 
 
@@ -118,8 +122,10 @@ def parse_fcst(fcst: str) -> FcstSpec | None:
     return None
 
 
-def select_record(records: list[IdxRecord], param: str, level: str, kind: str, fhr: int) -> tuple[IdxRecord, FcstSpec] | None:
-    """Pick the one message that represents ``param@level`` at forecast hour ``fhr``.
+def select_record(records: list[IdxRecord], param: str, level: str, kind: str, fhr: int,
+                  extra: str | None = None) -> tuple[IdxRecord, FcstSpec] | None:
+    """Pick the one message that represents ``param@level`` at forecast hour ``fhr`` (and, when given,
+    whose ``extra`` is exactly that, such as one aerosol species).
 
     * instant -> the analysis / "N hour fcst" message
     * accum   -> the running total since initialisation ("0-N hour acc" / "0-K day acc")
@@ -127,7 +133,7 @@ def select_record(records: list[IdxRecord], param: str, level: str, kind: str, f
     """
     best: tuple[IdxRecord, FcstSpec] | None = None
     for rec in records:
-        if rec.param != param or rec.level != level:
+        if rec.param != param or rec.level != level or (extra is not None and rec.extra != extra):
             continue
         spec = parse_fcst(rec.fcst)
         if spec is None or spec.end != fhr:
@@ -198,13 +204,15 @@ class GribClient:
             time.sleep(min(2**attempt, 20))
         raise RuntimeError(f"{method} {url} failed after {self.retries} attempts: {last}")
 
+    def _index_url(self, run: datetime, fhr: int, product: str) -> str:
+        return self.source.index_url(self.source.file_url(self.base_url, run, fhr, product))
+
     def has_idx(self, run: datetime, fhr: int, product: str = "atmos") -> bool:
-        url = self.source.file_url(self.base_url, run, fhr, product) + ".idx"
-        return self._request("HEAD", url, not_found_ok=True) is not None
+        return self._request("HEAD", self._index_url(run, fhr, product), not_found_ok=True) is not None
 
     def idx(self, run: datetime, fhr: int, product: str = "atmos") -> list[IdxRecord] | None:
-        resp = self._request("GET", self.source.file_url(self.base_url, run, fhr, product) + ".idx", not_found_ok=True)
-        return None if resp is None else parse_idx(resp.text)
+        resp = self._request("GET", self._index_url(run, fhr, product), not_found_ok=True)
+        return None if resp is None else (self.source.parse_index or parse_idx)(resp.text)
 
     def fetch_records(self, run: datetime, fhr: int, records: list[IdxRecord],
                       product: str = "atmos") -> dict[int, bytes]:
@@ -228,13 +236,13 @@ class GribClient:
 
     def latest_complete_run(self, now: datetime | None = None, max_fhr: int | None = None,
                             lookback_cycles: int = 8) -> datetime | None:
-        """Newest cycle whose final required step has been published."""
+        """Newest cycle (of the source's cycle hours) whose final required step has been published."""
         now = now or datetime.now(timezone.utc)
         cycle = now.replace(hour=now.hour - now.hour % 6, minute=0, second=0, microsecond=0)
         last_fhr = self.source.forecast_hours(self.source.max_fhr if max_fhr is None else max_fhr)[-1]
         for k in range(lookback_cycles):
             run = cycle - timedelta(hours=6 * k)
-            if self.has_idx(run, last_fhr):
+            if run.hour in self.source.cycle_hours and self.has_idx(run, last_fhr):
                 return run
         return None
 
@@ -246,7 +254,10 @@ GfsClient = GribClient  # the name before other sources were added
 
 
 def decode_message(blob: bytes, grid: Grid = GRID) -> np.ndarray:
-    """Decode one GRIB2 message into a float32 array oriented like ``grid`` (north -> south)."""
+    """Decode one GRIB2 message into a float32 array oriented like ``grid`` (north -> south).
+
+    A global field that starts at another longitude (ECMWF's at 180°) is turned to start at the grid's.
+    """
     import pygrib  # deferred: only the ingest process needs ecCodes
 
     msg = pygrib.fromstring(blob)
@@ -263,6 +274,9 @@ def decode_message(blob: bytes, grid: Grid = GRID) -> np.ndarray:
         arr = arr[::-1]
         north = float(msg["latitudeOfLastGridPointInDegrees"])
     west = float(msg["longitudeOfFirstGridPointInDegrees"]) % 360.0
-    if abs(north - grid.lat0) > 1e-3 or abs(west - grid.lon0 % 360.0) > 1e-3:
+    shift = ((west - grid.lon0) % 360.0) / grid.dlon  # columns from the grid's first longitude to the field's
+    if abs(north - grid.lat0) > 1e-3 or abs(shift - round(shift)) > 1e-3 or (round(shift) % grid.nlon and not grid.wraps):
         raise ValueError(f"Grid origin mismatch: ({north}, {west}) vs ({grid.lat0}, {grid.lon0})")
+    if round(shift) % grid.nlon:
+        arr = np.roll(arr, round(shift), axis=1)
     return np.ascontiguousarray(arr)

@@ -25,6 +25,7 @@ from .places import ATTRIBUTION as PLACES_ATTRIBUTION
 from .places import PlaceIndex
 from .render import render_tile
 from .service import ForecastError, enabled_catalog, get_run, point_forecast, step_for
+from .sources import SOURCES
 from .store import RunStore, iso, parse_run_id
 from .thresholds import ThresholdRequest, check_thresholds
 
@@ -126,7 +127,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 models[model] = {"latest_run": None}
                 continue
             age = (now - parse_run_id(rid)).total_seconds() / 3600
-            models[model] = {"latest_run": rid, "age_hours": round(age, 1), "stale": age > STALE_AFTER_HOURS}
+            limit = SOURCES[model].stale_after_hours if model in SOURCES else STALE_AFTER_HOURS
+            models[model] = {"latest_run": rid, "age_hours": round(age, 1), "stale": age > limit}
         primary = next(iter(stores))
         if all(m["latest_run"] for m in models.values()):
             status = "ok"

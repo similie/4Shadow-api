@@ -219,3 +219,32 @@ WIND_POWER_WM2 = Palette(
         (800, "#d9d94a"), (1200, "#f2a33a"), (2000, "#e0562c"), (4000, "#6a1f6b"),
     )
 )
+
+# Air quality: the US EPA's AQI categories (2024) for 24-hour PM2.5 and PM10, in the AQI's own colours
+# (good, moderate, unhealthy for sensitive groups, unhealthy, very unhealthy, hazardous). Each colour is
+# reached at the top of its category; good air is see-through so the map shows where the air is clean.
+PM25_UGM3 = Palette(
+    (
+        (1, "#00e40018"), (9, "#00e40080"), (35.4, "#ffff00e0"), (55.4, "#ff7e00"), (125.4, "#ff0000"),
+        (225.4, "#8f3f97"), (325, "#7e0023"),
+    ),
+    transparent_below=1,
+)
+
+PM10_UGM3 = Palette(
+    (
+        (5, "#00e40018"), (54, "#00e40080"), (154, "#ffff00e0"), (254, "#ff7e00"), (354, "#ff0000"),
+        (424, "#8f3f97"), (604, "#7e0023"),
+    ),
+    transparent_below=5,
+)
+
+# Aerosol optical depth at 550 nm: about 0.1 is clear air, 0.3 visible haze, 1 a thick pall of dust or
+# smoke that dims the sun.
+AEROSOL_OPTICAL_DEPTH = Palette(
+    (
+        (0.05, "#fff7bc30"), (0.1, "#fee391"), (0.3, "#fec44f"), (0.5, "#fe9929"), (1, "#d95f0e"),
+        (2, "#993404"), (4, "#4a1a02"),
+    ),
+    transparent_below=0.05,
+)

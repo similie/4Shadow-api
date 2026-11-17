@@ -11,11 +11,11 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv())
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-KNOWN_MODELS = ("gfs", "aigfs")
+KNOWN_MODELS = ("gfs", "aigfs", "ifs", "aifs", "aerosols")
 
 
 def parse_models(value: str) -> tuple[str, ...]:
-    """FORECAST_MODELS, e.g. "gfs,aigfs". GFS is always included and comes first: the MCP server and the
+    """FORECAST_MODELS, e.g. "gfs,aigfs,ifs". GFS is always included and comes first: the MCP server and the
     /v1 compatibility routes use it, and the service counts as up when it has a GFS run."""
     models = [m.strip().lower() for m in value.split(",") if m.strip()]
     unknown = sorted(set(models) - set(KNOWN_MODELS))
@@ -33,12 +33,14 @@ class Settings:
     step_wait_seconds: int = 0
     gfs_base_url: str = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
     aigfs_base_url: str | None = None  # None: the model's default (NOAA's open-data bucket on AWS)
+    # Other models' servers by model id (IFS_BASE_URL, AIFS_BASE_URL, AEROSOLS_BASE_URL); absent: the default.
+    base_urls: tuple[tuple[str, str], ...] = ()
     models: tuple[str, ...] = KNOWN_MODELS  # models to serve and ingest; GFS first
     tile_cache_size: int = 4096
     places_db: Path | None = None  # place search index (python -m forecast.places build); None turns it off
 
     def base_url(self, model: str) -> str | None:
-        return {"gfs": self.gfs_base_url, "aigfs": self.aigfs_base_url}.get(model)
+        return {**dict(self.base_urls), "gfs": self.gfs_base_url, "aigfs": self.aigfs_base_url}.get(model)
 
 
 def get_settings() -> Settings:
@@ -51,6 +53,8 @@ def get_settings() -> Settings:
         step_wait_seconds=int(os.getenv("FORECAST_STEP_WAIT_SECONDS", "0")),
         gfs_base_url=os.getenv("GFS_BASE_URL", "https://noaa-gfs-bdp-pds.s3.amazonaws.com"),
         aigfs_base_url=os.getenv("AIGFS_BASE_URL") or None,
+        base_urls=tuple((m, url) for m in KNOWN_MODELS if m not in ("gfs", "aigfs")
+                        if (url := os.getenv(f"{m.upper()}_BASE_URL"))),
         models=parse_models(os.getenv("FORECAST_MODELS", ",".join(KNOWN_MODELS))),
         tile_cache_size=int(os.getenv("FORECAST_TILE_CACHE_SIZE", "4096")),
         places_db=Path(os.getenv("FORECAST_PLACES_DB") or REPO_ROOT / "data" / "places" / "places.sqlite").expanduser(),
