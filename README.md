@@ -161,7 +161,6 @@ flowchart TB
 - Forecast confidence from how much the models agree.
 - Better point forecasts with local corrections for elevation and coasts.
 - OAuth for the MCP server, so assistants can connect without a pasted key.
-- Registration as a [Digital Public Good](https://digitalpublicgoods.net).
 
 Ideas and votes are welcome in [issues](https://github.com/similie/4Shadow-api/issues).
 
