@@ -1,4 +1,5 @@
-"""What the ingest needs to know about a model's files on an open-data server."""
+"""What the ingest needs to know about a model: GRIB files on an open-data server (``Source``), or arrays
+read through a data service's own client (``ArraySource``)."""
 
 from __future__ import annotations
 
@@ -7,6 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..grid import Grid
+
+
+class StepUnavailable(RuntimeError):
+    """A step a source hasn't published yet: the run isn't ingested this time."""
 
 
 def _idx_url(file_url: str) -> str:
@@ -36,4 +41,25 @@ class Source:
     parse_index: Callable[[str], list] | None = None  # None: NCEP .idx (gfs.parse_idx)
     # /v2/health calls a model's newest run stale after this many hours: its cycle, the hours until its
     # last step is published, and the ingest.
+    stale_after_hours: float = 12.0
+
+
+@dataclass(frozen=True)
+class ArraySource:
+    """A model read as arrays through a data service's client rather than as GRIB files (Copernicus Marine).
+
+    ``client()`` makes the reader: an object with ``latest_run(max_fhr)``, the newest run with that many
+    hours (or None), and ``step(run, fhr, names, grid)``, the named variables at that step on ``grid`` (a
+    dict of float32 arrays, NaN where missing), raising ``StepUnavailable`` when the step isn't there yet.
+    ``base_url`` is where a run's ``source`` record says the data came from.
+    """
+
+    model: str
+    grid: Grid
+    max_fhr: int
+    base_url: str
+    forecast_hours: Callable[[int], list[int]]
+    source_info: Callable[[str, datetime, Sequence[str]], dict]
+    client: Callable[[], object]
+    cycle_hours: tuple[int, ...] = (0,)
     stale_after_hours: float = 12.0

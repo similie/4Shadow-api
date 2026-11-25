@@ -1,4 +1,4 @@
-"""Ingest model runs (GFS, AIGFS, ECMWF IFS and AIFS, GEFS-Aerosols) into the array store.
+"""Ingest model runs (GFS, AIGFS, ECMWF IFS and AIFS, GEFS-Aerosols, the ocean) into the array store.
 
     python -m forecast.ingest                    # each model's newest complete run, if it's new
     python -m forecast.ingest --loop             # ...and keep doing so (systemd service)
@@ -8,7 +8,8 @@
 Models come from FORECAST_MODELS (default: all of them) and are ingested one after the other, one run
 at a time each (guarded by a lock file per model). Downloads are prefetched in a small thread pool;
 decoding happens sequentially in step order because ecCodes is not thread-safe and because
-de-accumulating precipitation needs the previous step anyway.
+de-accumulating precipitation needs the previous step anyway. The ocean comes as arrays through Copernicus
+Marine's own client (an ``ArraySource``), a step at a time with the next one fetched meanwhile.
 """
 
 from __future__ import annotations
@@ -28,15 +29,12 @@ import numpy as np
 
 from .catalog import CATALOGS, GFS, ModelCatalog, Variable
 from .config import Settings, get_settings
-from .sources import SOURCES, gfs
+from .sources import SOURCES, ArraySource, gfs
+from .sources.base import StepUnavailable
 from .sources.gfs import FcstSpec, GribClient, IdxRecord
 from .store import RunStore, RunWriter, parse_run_id, prune_runs, read_latest, run_id
 
 log = logging.getLogger("forecast.ingest")
-
-
-class StepUnavailable(RuntimeError):
-    pass
 
 
 @dataclass
@@ -196,8 +194,10 @@ def process_step(writer: RunWriter, catalog: ModelCatalog, step: int, payload: S
         writer.write_static(sid, values, {"name": sf.name, "units": sf.units})
 
 
-def client_for(settings: Settings, model: str) -> GribClient:
+def client_for(settings: Settings, model: str):
     source = SOURCES[model]
+    if isinstance(source, ArraySource):
+        return source.client()
     return GribClient(settings.base_url(model) or source.default_base_url, source=source)
 
 
@@ -206,9 +206,57 @@ def _hours(settings: Settings, model: str, max_fhr: int | None) -> int:
     return min(settings.max_fhr if max_fhr is None else max_fhr, SOURCES[model].max_fhr)
 
 
+def _finish(writer: RunWriter, catalog: ModelCatalog, settings: Settings, t0: float) -> None:
+    """Give a model without its own land mask and terrain GFS's (same grid), then publish the run."""
+    if not catalog.static and catalog.model != GFS.model:
+        gfs_run = RunStore(settings.data_root, GFS.model).get()
+        copied = writer.copy_static_from(gfs_run, f"gfs run {gfs_run.id}") if gfs_run else []
+        if not copied:
+            log.warning("%s run %s has no land mask or terrain height: no GFS run on the same grid to take them from",
+                        catalog.model, writer.id)
+    writer.publish(keep_runs=settings.keep_runs, extra={"ingest_seconds": round(time.monotonic() - t0, 1)})
+
+
+def ingest_array_run(run: datetime, settings: Settings, client=None, catalog: ModelCatalog = GFS,
+                     max_fhr: int | None = None) -> str:
+    """A run of a model read as arrays (an ``ArraySource``): the stored variables' ``grib_param`` name
+    them in the source's dataset, and each step comes already on the source's grid."""
+    source = SOURCES[catalog.model]
+    client = client or client_for(settings, catalog.model)
+    hours = source.forecast_hours(_hours(settings, catalog.model, max_fhr))
+    stored = catalog.stored_variables()
+    names = sorted({v.grib_param for v in stored})
+    writer = RunWriter(settings.data_root / catalog.model, catalog.model, run, source.grid, hours, stored,
+                       source=source.source_info(source.base_url, run, catalog.products()))
+    log.info("Ingesting %s run %s: %d steps x %d variables", catalog.model, writer.id, len(hours), len(stored))
+    t0 = time.monotonic()
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"{catalog.model}-dl")
+    try:
+        ahead = pool.submit(client.step, run, hours[0], names, source.grid)
+        for k, fhr in enumerate(hours):
+            arrays = ahead.result()
+            if k + 1 < len(hours):
+                ahead = pool.submit(client.step, run, hours[k + 1], names, source.grid)
+            for var in stored:
+                values = arrays.get(var.grib_param)
+                writer.write(var.id, k, None if values is None else _clip(var, _mask(var, _convert(var, values))))
+            if k % 24 == 0 or k == len(hours) - 1:
+                log.info("  f%03d done (%d/%d, %.0fs elapsed)", fhr, k + 1, len(hours), time.monotonic() - t0)
+        pool.shutdown(wait=True)
+        _finish(writer, catalog, settings, t0)
+    except BaseException:
+        pool.shutdown(wait=False, cancel_futures=True)
+        writer.abort()
+        raise
+    log.info("Run %s ingested in %.0fs", writer.id, time.monotonic() - t0)
+    return writer.id
+
+
 def ingest_run(run: datetime, settings: Settings, client: GribClient | None = None,
                catalog: ModelCatalog = GFS, max_fhr: int | None = None) -> str:
     source = SOURCES[catalog.model]
+    if isinstance(source, ArraySource):
+        return ingest_array_run(run, settings, client, catalog, max_fhr)
     client = client or client_for(settings, catalog.model)
     hours = source.forecast_hours(_hours(settings, catalog.model, max_fhr))
     model_root = settings.data_root / catalog.model
@@ -243,13 +291,7 @@ def ingest_run(run: datetime, settings: Settings, client: GribClient | None = No
                 log.info("  f%03d done (%d/%d, %.0fs elapsed, %.0fs decoding)", fhr, k + 1, len(hours),
                          time.monotonic() - t0, decode_s)
         pool.shutdown(wait=True)
-        if not catalog.static and catalog.model != GFS.model:
-            gfs_run = RunStore(settings.data_root, GFS.model).get()
-            copied = writer.copy_static_from(gfs_run, f"gfs run {gfs_run.id}") if gfs_run else []
-            if not copied:
-                log.warning("%s run %s has no land mask or terrain height: no GFS run on the same grid to take them from",
-                            catalog.model, writer.id)
-        writer.publish(keep_runs=settings.keep_runs, extra={"ingest_seconds": round(time.monotonic() - t0, 1)})
+        _finish(writer, catalog, settings, t0)
     except BaseException:
         pool.shutdown(wait=False, cancel_futures=True)
         writer.abort()
@@ -262,9 +304,12 @@ def ingest_latest(settings: Settings, client: GribClient | None = None, catalog:
                   max_fhr: int | None = None, force: bool = False) -> str | None:
     client = client or client_for(settings, catalog.model)
     max_fhr = _hours(settings, catalog.model, max_fhr)
-    candidate = client.latest_complete_run(max_fhr=max_fhr)
+    if isinstance(SOURCES[catalog.model], ArraySource):
+        candidate = client.latest_run(max_fhr)
+    else:
+        candidate = client.latest_complete_run(max_fhr=max_fhr)
     if candidate is None:
-        log.warning("No complete %s run found on %s", catalog.model, client.base_url)
+        log.warning("No complete %s run found", catalog.model)
         return None
     rid = run_id(candidate)
     current = read_latest(settings.data_root / catalog.model)

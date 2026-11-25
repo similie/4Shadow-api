@@ -19,7 +19,8 @@ they are read, from stored ones, so they cost no storage and work everywhere a s
 point forecasts, tiles and threshold checks. Their formulas are in ``derive`` below.
 
 Each model has its own catalog: GFS; AIGFS (NOAA's AI model, fewer variables, 6-hourly); IFS and AIFS
-(ECMWF's physics and AI models, from its open data); and GEFS-Aerosols (air quality). A variable keeps
+(ECMWF's physics and AI models, from its open data); GEFS-Aerosols (air quality); and the ocean (surface
+currents with tides, from Copernicus Marine, whose "GRIB selector" is the variable's name in its dataset). A variable keeps
 the same id, units and meaning in every model that has it, so clients can ask any model for ``t2m``.
 For ECMWF's files the GRIB selector is its short name (``2t``) and level type (``sfc``, ``sol:1``).
 """
@@ -183,6 +184,11 @@ def _direction(u, v):
     return np.mod(270.0 - np.degrees(np.arctan2(v, u)), 360.0)
 
 
+def _heading(u, v):
+    # Oceanographic convention: direction a current flows TOWARDS, clockwise from north.
+    return np.mod(np.degrees(np.arctan2(u, v)), 360.0)
+
+
 def derive(var_id: str, inputs: dict[str, np.ndarray]) -> np.ndarray:
     if var_id == "wind_speed":
         return _speed(inputs["u10"], inputs["v10"])
@@ -211,6 +217,10 @@ def derive(var_id: str, inputs: dict[str, np.ndarray]) -> np.ndarray:
         return (saturation_vapour_pressure(t) * (1.0 - _rh(inputs) / 100.0) / 10.0).astype(np.float32)
     if var_id == "fire_weather":
         return fosberg(inputs["t2m"], _rh(inputs), _speed(inputs["u10"], inputs["v10"]))
+    if var_id == "current_speed":
+        return _speed(inputs["current_u"], inputs["current_v"])
+    if var_id == "current_dir":
+        return _heading(inputs["current_u"], inputs["current_v"])
     if var_id == "smoke_aod":
         return (inputs["aod_om"] + inputs["aod_bc"]).astype(np.float32)
     raise KeyError(var_id)
@@ -668,5 +678,32 @@ AEROSOLS = ModelCatalog(
 )
 
 
-CATALOGS: dict[str, ModelCatalog] = {c.model: c for c in (GFS, AIGFS, IFS, AIFS, AEROSOLS)}
+_TOTAL = "the ocean's circulation, tidal currents and the drift waves cause, combined"
+
+OCEAN = ModelCatalog(
+    model="ocean",
+    title="Copernicus Marine global ocean 1/12° (surface currents with tides)",
+    description=("Surface currents from Mercator Ocean's global ocean model (GLO12) for the Copernicus Marine "
+                 "Service, with tidal currents (FES2014) and the drift waves cause: hourly to about 10 days, "
+                 "updated daily. Stored at 0.25°, each point the mean of the sea around it at 1/12°."),
+    variables=_vars(
+        Variable("current_u", "Current u-component", "m/s", f"Eastward surface current: {_TOTAL}. Open sea only.",
+                 grib_param="utotal", valid=(-10, 10), scale=0.001, decimals=2, marine=True),
+        Variable("current_v", "Current v-component", "m/s", f"Northward surface current: {_TOTAL}. Open sea only.",
+                 grib_param="vtotal", valid=(-10, 10), scale=0.001, decimals=2, marine=True),
+        Variable("current_speed", "Current speed", "m/s",
+                 f"Speed of the water at the sea surface: {_TOTAL}. 0.5 m/s (1 knot) is a current a swimmer or a "
+                 "small boat feels; tidal straits and the strongest ocean currents run 2 m/s (4 knots) or more. "
+                 "Open sea only.",
+                 derived_from=("current_u", "current_v"), decimals=2, marine=True, palette=palettes.CURRENT_MS),
+        Variable("current_dir", "Current direction", "°",
+                 "Direction the surface current flows towards, clockwise from north: the opposite of wind and "
+                 "wave directions, which say where those come from. Open sea only.",
+                 derived_from=("current_u", "current_v"), scale=0.1, decimals=0, circular=True, marine=True),
+    ),
+    daily=(DailySpec("current_speed_max", "current_speed", "max", "m/s", decimals=2),),
+)
+
+
+CATALOGS: dict[str, ModelCatalog] = {c.model: c for c in (GFS, AIGFS, IFS, AIFS, AEROSOLS, OCEAN)}
 

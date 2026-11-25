@@ -154,6 +154,15 @@ WAVE_PERIOD_S = Palette(
     )
 )
 
+# Surface currents: most of the open ocean moves under 0.5 m/s (1 knot); the Gulf Stream, the Agulhas and
+# tidal straits run 2 m/s (4 knots) or more. Land is missing, so transparent.
+CURRENT_MS = Palette(
+    (
+        (0, "#1d2f5a"), (0.1, "#24508f"), (0.25, "#2f86c4"), (0.5, "#3fb8a8"), (0.75, "#7ccc6a"),
+        (1, "#d6d94a"), (1.5, "#f2a33a"), (2, "#e0562c"), (3, "#b3245a"), (4, "#e6d9f2"),
+    )
+)
+
 # Simulated radar, in the colours weather radar displays use; below 10 dBZ (drizzle, cloud) is not shown.
 REFLECTIVITY_DBZ = Palette(
     (
