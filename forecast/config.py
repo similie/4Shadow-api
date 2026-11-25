@@ -11,7 +11,15 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv())
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-KNOWN_MODELS = ("gfs", "aigfs", "ifs", "aifs", "aerosols")
+KNOWN_MODELS = ("gfs", "aigfs", "ifs", "aifs", "aerosols", "ocean")
+# Models read with an account, by the environment variables that hold its login. Without them a model is
+# left out of the default FORECAST_MODELS (it couldn't be ingested); listing it there turns it on anyway.
+ACCOUNT_MODELS = {"ocean": ("COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD")}
+
+
+def default_models() -> str:
+    """Every model, except one whose account login isn't set."""
+    return ",".join(m for m in KNOWN_MODELS if all(os.getenv(k) for k in ACCOUNT_MODELS.get(m, ())))
 
 
 def parse_models(value: str) -> tuple[str, ...]:
@@ -55,7 +63,7 @@ def get_settings() -> Settings:
         aigfs_base_url=os.getenv("AIGFS_BASE_URL") or None,
         base_urls=tuple((m, url) for m in KNOWN_MODELS if m not in ("gfs", "aigfs")
                         if (url := os.getenv(f"{m.upper()}_BASE_URL"))),
-        models=parse_models(os.getenv("FORECAST_MODELS", ",".join(KNOWN_MODELS))),
+        models=parse_models(os.getenv("FORECAST_MODELS") or default_models()),
         tile_cache_size=int(os.getenv("FORECAST_TILE_CACHE_SIZE", "4096")),
         places_db=Path(os.getenv("FORECAST_PLACES_DB") or REPO_ROOT / "data" / "places" / "places.sqlite").expanduser(),
     )

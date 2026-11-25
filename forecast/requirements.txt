@@ -10,4 +10,6 @@ mcp==2.3.0
 pillow==13.0.0
 requests==2.34.2
 python-dotenv==1.2.4
+# Copernicus Marine's client, for the ocean model (surface currents); only the ingest imports it.
+copernicusmarine==2.5.1
 timezonefinder==9.2.0
