@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -88,8 +89,21 @@ def block_mean(values: np.ndarray, native: Grid, target: Grid) -> np.ndarray:
     return np.where(count > 0, total / np.maximum(count, 1), np.nan).astype(np.float32)
 
 
+def _toolbox():
+    """The ``copernicusmarine`` toolbox, imported here: only the ingest needs it. Its import makes every log
+    time in the process UTC and gives its logger a handler of its own, so the ingest's log would change
+    clock partway and print the toolbox's lines twice. This undoes both."""
+    import copernicusmarine
+
+    logging.Formatter.converter = time.localtime
+    toolbox_log = logging.getLogger("copernicusmarine")
+    for handler in list(toolbox_log.handlers):
+        toolbox_log.removeHandler(handler)
+    return copernicusmarine
+
+
 class MarineClient:
-    """Reads the dataset through the ``copernicusmarine`` toolbox (imported here: only the ingest needs it)."""
+    """Reads the dataset through the ``copernicusmarine`` toolbox."""
 
     def __init__(self, dataset_id: str = DATASET_ID) -> None:
         self.dataset_id = dataset_id
@@ -101,8 +115,7 @@ class MarineClient:
         if missing:
             raise RuntimeError(f"No Copernicus Marine login: set {' and '.join(missing)} (a free account at "
                                "https://data.marine.copernicus.eu/register)")
-        import copernicusmarine
-
+        copernicusmarine = _toolbox()
         window = {}
         if start is not None:
             window = {"start_datetime": f"{_utc(start):%Y-%m-%dT%H:%M:%S}", "end_datetime": f"{_utc(end):%Y-%m-%dT%H:%M:%S}"}

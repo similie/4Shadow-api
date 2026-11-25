@@ -2,6 +2,8 @@
 current's heading, the default model list, and a run ingested and served end to end."""
 
 import dataclasses
+import logging
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -96,6 +98,17 @@ def test_the_client_needs_a_login(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(RuntimeError, match="COPERNICUSMARINE_SERVICE_USERNAME"):
         copernicus_marine.MarineClient().latest_run()
+
+
+def test_the_toolbox_leaves_the_log_alone(monkeypatch):
+    """Importing the toolbox makes log times UTC and adds a handler of its own; the client undoes both."""
+    pytest.importorskip("copernicusmarine")
+    monkeypatch.setattr(logging.Formatter, "converter", time.gmtime)  # as the toolbox's import does
+    toolbox_log = logging.getLogger("copernicusmarine")
+    toolbox_log.addHandler(logging.NullHandler())
+    copernicus_marine._toolbox()
+    assert logging.Formatter.converter is time.localtime
+    assert not toolbox_log.handlers
 
 
 class FakeOcean:
