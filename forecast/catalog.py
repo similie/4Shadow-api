@@ -20,7 +20,7 @@ point forecasts, tiles and threshold checks. Their formulas are in ``derive`` be
 
 Each model has its own catalog: GFS; AIGFS (NOAA's AI model, fewer variables, 6-hourly); IFS and AIFS
 (ECMWF's physics and AI models, from its open data); GEFS-Aerosols (air quality); and the ocean (surface
-currents with tides, from Copernicus Marine, whose "GRIB selector" is the variable's name in its dataset). A variable keeps
+currents and tides, from Copernicus Marine, whose "GRIB selector" is the variable's name in its dataset). A variable keeps
 the same id, units and meaning in every model that has it, so clients can ask any model for ``t2m``.
 For ECMWF's files the GRIB selector is its short name (``2t``) and level type (``sfc``, ``sol:1``).
 """
@@ -682,10 +682,11 @@ _TOTAL = "the ocean's circulation, tidal currents and the drift waves cause, com
 
 OCEAN = ModelCatalog(
     model="ocean",
-    title="Copernicus Marine global ocean 1/12° (surface currents with tides)",
+    title="Copernicus Marine global ocean 1/12° (surface currents and tides)",
     description=("Surface currents from Mercator Ocean's global ocean model (GLO12) for the Copernicus Marine "
-                 "Service, with tidal currents (FES2014) and the drift waves cause: hourly to about 10 days, "
-                 "updated daily. Stored at 0.25°, each point the mean of the sea around it at 1/12°."),
+                 "Service, with tidal currents (FES2014) and the drift waves cause, and tide heights (FES2014): "
+                 "hourly to about 10 days, updated daily. Stored at 0.25°, each point the mean of the sea around "
+                 "it at 1/12°. Point forecasts also list the high and low waters."),
     variables=_vars(
         Variable("current_u", "Current u-component", "m/s", f"Eastward surface current: {_TOTAL}. Open sea only.",
                  grib_param="utotal", valid=(-10, 10), scale=0.001, decimals=2, marine=True),
@@ -700,7 +701,17 @@ OCEAN = ModelCatalog(
                  "Direction the surface current flows towards, clockwise from north: the opposite of wind and "
                  "wave directions, which say where those come from. Open sea only.",
                  derived_from=("current_u", "current_v"), scale=0.1, decimals=0, circular=True, marine=True),
+        Variable("tide_height", "Tide height", "m",
+                 "Height of the tide above (or below) mean sea level: the astronomical tide alone (FES2014), "
+                 "without the rise or fall that wind and air pressure add. Heights are from mean sea level, not "
+                 "from the chart datum (the lowest tide) that tide tables use, so they differ from a tide table "
+                 "by a constant there; times and ranges compare. A global model: less exact in harbours, "
+                 "estuaries and narrow bays, and not for navigation. Open sea only.",
+                 grib_param="ocean_tide", valid=(-20, 20), scale=0.001, decimals=2, marine=True,
+                 palette=palettes.TIDE_M),
     ),
+    # No daily tide summary: the hourly values miss a high or low water by up to 10 cm on a large tide, so
+    # the point forecast's ``tides`` (placed between the hours) are the day's highs and lows.
     daily=(DailySpec("current_speed_max", "current_speed", "max", "m/s", decimals=2),),
 )
 

@@ -15,6 +15,7 @@ import numpy as np
 
 from .catalog import CATALOGS, ModelCatalog, Variable, derive
 from .store import RUN_ID_RE, Run, RunStore, iso, parse_run_id
+from .tides import extremes
 from .timeutil import daily_aggregate, resolve_timezone
 
 _FHR_RE = re.compile(r"^f(\d{1,3})$")
@@ -108,8 +109,10 @@ def point_forecast(
     except ValueError as exc:
         raise ForecastError(400, str(exc)) from exc
 
+    # High and low waters come from the tide's own series, whichever variables were asked for.
+    tides = "tide_height" in cat.variables and "tide_height" in r.variables
     needed: set[str] = set()
-    for vid in [v.id for v in wanted] + ([s.source for s in cat.daily] if daily else []):
+    for vid in [v.id for v in wanted] + ([s.source for s in cat.daily] if daily else []) + (["tide_height"] if tides else []):
         v = cat.get(vid)
         if v is not None:
             needed.update(d for d in (v.derived_from or (v.id,)) if d in r.variables)
@@ -192,6 +195,9 @@ def point_forecast(
             agg = {key: [vals[n] for n in keep] for key, vals in agg.items()}
         body["daily"] = agg
         body["daily_units"] = {d.id: d.units for d in cat.daily if d.id in agg}
+    if tides:
+        body["tides"] = [{"time": iso(e["time"]), "type": e["type"], "height": round(e["height"], 2)}
+                         for e in extremes(vt[sl], series["tide_height"][sl])]
     if sea is not None:
         body["location"]["sea_point"] = {"lat": sea[0], "lon": sea[1], "distance_km": sea[2]}
     body["source"] = r.manifest.get("source", {})

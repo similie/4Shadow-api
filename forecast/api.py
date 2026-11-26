@@ -229,7 +229,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v2/{model}/forecast", tags=["forecast"])
     def model_forecast(model: str, o: ForecastOptions):
-        """The same forecast from another model: /v2/aigfs/forecast for AIGFS (see /v2 for the models)."""
+        """The same forecast from another model: /v2/aigfs/forecast for AIGFS (see /v2 for the models).
+        The ocean model's also lists the high and low waters in the timeseries' span: ``tides``, each with
+        its time (UTC), ``type`` (high or low) and ``height`` in metres from mean sea level."""
         return answer_forecast(model, o)
 
     @app.get("/v2/{model}/tiles/{run}/{var}/{time}/{z}/{x}/{y}.png", tags=["tiles"],
