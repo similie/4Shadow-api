@@ -1,10 +1,10 @@
-"""Surface currents with tides from Copernicus Marine: the 1/12° to 0.25° averaging, run dates, the
-current's heading, the default model list, and a run ingested and served end to end."""
+"""Surface currents and tides from Copernicus Marine: the 1/12° to 0.25° averaging, run dates, the
+current's heading, the default model list, reading two datasets, and a run ingested and served end to end."""
 
 import dataclasses
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -111,8 +111,13 @@ def test_the_toolbox_leaves_the_log_alone(monkeypatch):
     assert not toolbox_log.handlers
 
 
+def tide(fhr):
+    """A semidiurnal tide of 1.5 m: high water 3 h into the run, then every 12.42 h."""
+    return 1.5 * np.cos(2 * np.pi * (fhr - 3) / 12.42)
+
+
 class FakeOcean:
-    """Currents flowing north-east, faster each hour; "land" east of 180°."""
+    """Currents flowing north-east, faster each hour, and a tide; "land" east of 180°."""
 
     def __init__(self, missing_from: int | None = None):
         self.missing_from = missing_from
@@ -128,7 +133,8 @@ class FakeOcean:
         lon = grid.lon0 + np.arange(grid.nlon) * grid.dlon
         sea = np.broadcast_to(lon[None, :] < 180, grid.shape)
         speed = 0.1 * (fhr + 1)
-        return {name: np.where(sea, np.float32(speed), np.float32(np.nan)) for name in names}
+        return {name: np.where(sea, np.float32(tide(fhr) if name == "ocean_tide" else speed), np.float32(np.nan))
+                for name in names}
 
 
 def test_ingest_and_serve_currents(tmp_path, monkeypatch):
@@ -137,7 +143,7 @@ def test_ingest_and_serve_currents(tmp_path, monkeypatch):
     assert ingest.ingest_latest(settings, client=FakeOcean(), catalog=OCEAN, max_fhr=3) == "2026112400"
     run = RunStore(tmp_path, "ocean").get()
     assert run.forecast_hours.tolist() == [0, 1, 2, 3]
-    assert run.manifest["source"]["dataset"] == copernicus_marine.DATASET_ID
+    assert run.manifest["source"]["datasets"] == [copernicus_marine.CURRENTS_DATASET, copernicus_marine.SEA_LEVEL_DATASET]
     assert "Copernicus Marine Service Information" in run.manifest["source"]["attribution"]
 
     _, body = point_forecast({"ocean": RunStore(tmp_path, "ocean")}, -9.0, 125.0, model="ocean", start="run", tz="UTC")
@@ -166,3 +172,125 @@ def test_a_missing_hour_leaves_the_run_unpublished(tmp_path, monkeypatch):
     with pytest.raises(StepUnavailable):
         ingest.ingest_run(RUN, settings, client=FakeOcean(missing_from=2), catalog=OCEAN, max_fhr=3)
     assert RunStore(tmp_path, "ocean").get() is None
+
+
+def test_tides_are_served_with_their_high_and_low_waters(tmp_path, monkeypatch):
+    monkeypatch.setitem(ingest.SOURCES, "ocean", dataclasses.replace(SOURCES["ocean"], grid=COARSE))
+    settings = Settings(data_root=tmp_path, models=("gfs", "ocean"))
+    ingest.ingest_run(RUN, settings, client=FakeOcean(), catalog=OCEAN, max_fhr=30)
+    stores = {"ocean": RunStore(tmp_path, "ocean")}
+
+    _, body = point_forecast(stores, -9.0, 125.0, model="ocean", start="run", tz="UTC")
+    assert body["timeseries"]["tide_height"][:4] == [pytest.approx(round(tide(h), 2)) for h in range(4)]
+    assert body["units"]["tide_height"] == "m"
+    # Highs at 3 h and every 12.42 h after, lows halfway between; each time placed between the hours.
+    expected = [(3 + n * 6.21, "low" if n % 2 else "high") for n in range(5)]
+    assert [e["type"] for e in body["tides"]] == [kind for _, kind in expected]
+    for event, (hour, kind) in zip(body["tides"], expected):
+        when = datetime.fromisoformat(event["time"].replace("Z", "+00:00"))
+        assert abs((when - (RUN + timedelta(hours=hour))).total_seconds()) <= 5 * 60
+        assert event["height"] == pytest.approx(1.5 if kind == "high" else -1.5, abs=0.03)
+
+    # Asking for currents alone still lists the tides; far inland there are none.
+    _, currents = point_forecast(stores, -9.0, 125.0, model="ocean", variables="current_speed", start="run", tz="UTC")
+    assert len(currents["tides"]) == 5 and "tide_height" not in currents["timeseries"]
+    _, inland = point_forecast(stores, 10.0, 260.0, model="ocean", start="run", tz="UTC")
+    assert inland["tides"] == []
+
+    api = TestClient(create_app(settings))
+    r = api.get("/v2/ocean/forecast", params={"lat": -9, "lon": 125, "vars": "tide_height", "start": "run"})
+    assert r.status_code == 200 and r.json()["tides"][0]["type"] == "high"
+    v = {x["id"]: x for x in api.get("/v2/ocean/variables").json()["variables"]}
+    assert v["tide_height"]["tileable"] and v["tide_height"]["marine"]
+    assert api.get("/v2/ocean/tiles/latest/tide_height/f003/1/1/0.png").status_code == 200
+
+
+class FakeToolbox:
+    """Stands in for ``copernicusmarine``: each dataset is a small grid (``NATIVE_1``), latitudes rising as
+    Copernicus Marine's do. Its values are the latitude, plus an amount per variable, plus 10 an hour; the
+    hours are means labelled with the hour they start, so each is 5 more than the value at its label."""
+
+    def __init__(self, hours: dict[str, int], missing: dict[str, int] | None = None):
+        import xarray as xr
+
+        lats = np.linspace(-80.0, 90.0, NATIVE_1.nlat)
+        lons = NATIVE_1.lon0 + np.arange(NATIVE_1.nlon) * NATIVE_1.dlon
+        self.opened: list[str] = []
+        self.datasets = {}
+        names = {copernicus_marine.CURRENTS_DATASET: {"utotal": 0.0, "vtotal": 1000.0},
+                 copernicus_marine.SEA_LEVEL_DATASET: {"ocean_tide": 2000.0}}
+        for dataset_id, last in hours.items():
+            # The hours the tests read, to the series' last (which decides the run).
+            steps = sorted({h for h in (-2, -1, 0, 1, 2, 237, 238, 239, last - 2, last - 1, last)
+                            if h <= last and h != (missing or {}).get(dataset_id)})
+            times = np.array([np.datetime64(RUN.replace(tzinfo=None) + timedelta(hours=h), "ns") for h in steps])
+            ramp = 10.0 * (np.array(steps, np.float64) + 0.5)
+            field = lats[None, None, :, None] + ramp[:, None, None, None] + np.zeros((1, 1, 1, len(lons)))
+            self.datasets[dataset_id] = xr.Dataset(
+                {name: (("time", "depth", "latitude", "longitude"), (field + add).astype(np.float32))
+                 for name, add in names[dataset_id].items()},
+                coords={"time": times, "depth": [0.5], "latitude": lats, "longitude": lons})
+
+    def open_dataset(self, dataset_id, service, chunk_size_limit, start_datetime=None, end_datetime=None):
+        assert service == "arco-geo-series" and chunk_size_limit == 0
+        self.opened.append(dataset_id)
+        ds = self.datasets[dataset_id]
+        return ds if start_datetime is None else ds.sel(time=slice(start_datetime, end_datetime))
+
+
+@pytest.fixture
+def toolbox(monkeypatch):
+    for key in copernicus_marine.CREDENTIALS:
+        monkeypatch.setenv(key, "x")
+    monkeypatch.setattr(copernicus_marine, "NATIVE", NATIVE_1)
+
+    def install(**kwargs):
+        fake = FakeToolbox(**kwargs)
+        monkeypatch.setattr(copernicus_marine, "_toolbox", lambda: fake)
+        return fake
+
+    return install
+
+
+def test_the_run_is_the_newest_both_datasets_cover(toolbox):
+    uv, sl = copernicus_marine.CURRENTS_DATASET, copernicus_marine.SEA_LEVEL_DATASET
+    toolbox(hours={uv: 239, sl: 263})  # the sea level runs a day further ahead
+    assert copernicus_marine.MarineClient().latest_run() == RUN
+    toolbox(hours={uv: 263, sl: 239})
+    assert copernicus_marine.MarineClient().latest_run() == RUN
+    toolbox(hours={uv: 239, sl: 220})  # the sea level is behind: the run before has all its hours
+    assert copernicus_marine.MarineClient().latest_run() == RUN - timedelta(days=1)
+
+
+def test_each_variable_comes_from_its_dataset(toolbox):
+    uv, sl = copernicus_marine.CURRENTS_DATASET, copernicus_marine.SEA_LEVEL_DATASET
+    fake = toolbox(hours={uv: 239, sl: 263})
+    client = copernicus_marine.MarineClient()
+    names = ["ocean_tide", "utotal", "vtotal"]
+    first = client.step(RUN, 0, names, TARGET_3)
+    # North first, as the store keeps it: row 10 of the 3° grid is 60° N.
+    assert first["utotal"][10, 5] == pytest.approx(60.0)
+    assert first["vtotal"][10, 5] == pytest.approx(1060.0)
+    assert first["ocean_tide"][10, 5] == pytest.approx(2060.0)
+    # Each value at its hour, interpolated from the hourly means around it.
+    second = client.step(RUN, 1, names, TARGET_3)
+    assert second["utotal"][10, 5] == pytest.approx(70.0) and second["ocean_tide"][10, 5] == pytest.approx(2070.0)
+    assert sorted(fake.opened) == sorted([uv, sl])  # each dataset opened once a run
+    assert set(client.step(RUN, 1, ["ocean_tide"], TARGET_3)) == {"ocean_tide"}
+
+
+def test_the_last_hour_of_a_run_has_no_mean_after_it(toolbox):
+    uv, sl = copernicus_marine.CURRENTS_DATASET, copernicus_marine.SEA_LEVEL_DATASET
+    toolbox(hours={uv: 239, sl: 263})  # the run's window ends at its last hour, though the sea level goes on
+    last = copernicus_marine.MarineClient().step(RUN, 239, ["ocean_tide", "utotal"], TARGET_3)
+    assert last["ocean_tide"][10, 5] == pytest.approx(60.0 + 2000 + 2390)
+    assert last["utotal"][10, 5] == pytest.approx(60.0 + 2390)
+
+
+def test_an_hour_missing_from_either_dataset_is_unavailable(toolbox):
+    uv, sl = copernicus_marine.CURRENTS_DATASET, copernicus_marine.SEA_LEVEL_DATASET
+    toolbox(hours={uv: 239, sl: 263}, missing={sl: 1})
+    client = copernicus_marine.MarineClient()
+    assert set(client.step(RUN, 1, ["utotal", "vtotal"], TARGET_3)) == {"utotal", "vtotal"}
+    with pytest.raises(StepUnavailable, match="merged-sl"):
+        client.step(RUN, 1, ["ocean_tide", "utotal", "vtotal"], TARGET_3)

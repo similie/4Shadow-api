@@ -163,6 +163,16 @@ CURRENT_MS = Palette(
     )
 )
 
+# Tide height above or below mean sea level: blues for low water, warm colours for high, grey at the mean.
+# The open ocean's tides are within half a metre; on shelves and in bays they reach 2-4 m and in a few
+# places (the Bay of Fundy, Saint-Malo) more, which takes the end colours. Land is missing, so transparent.
+TIDE_M = Palette(
+    (
+        (-4, "#14205a"), (-2.5, "#1f3f8f"), (-1.5, "#2a62b8"), (-0.75, "#3d8fd0"), (-0.25, "#86b8d8"),
+        (0, "#b4b8bc"), (0.25, "#e3bd8f"), (0.75, "#f0964a"), (1.5, "#e0602c"), (2.5, "#b8284a"), (4, "#6e1450"),
+    )
+)
+
 # Simulated radar, in the colours weather radar displays use; below 10 dBZ (drizzle, cloud) is not shown.
 REFLECTIVITY_DBZ = Palette(
     (

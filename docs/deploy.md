@@ -136,7 +136,7 @@ Environment variables, from the unit's `EnvironmentFile` (`.env` in the checkout
 | --- | --- | --- |
 | `FORECAST_DATA_ROOT` | `<checkout>/data/forecast` | Where runs are stored |
 | `FORECAST_MODELS` | every model; `ocean` only with a Copernicus Marine login | Models to serve and ingest; `gfs` alone serves GFS only. GFS is always included |
-| `COPERNICUSMARINE_SERVICE_USERNAME`, `COPERNICUSMARINE_SERVICE_PASSWORD` | none | A Copernicus Marine account, for the ocean model (surface currents). Keep `.env` readable by root only |
+| `COPERNICUSMARINE_SERVICE_USERNAME`, `COPERNICUSMARINE_SERVICE_PASSWORD` | none | A Copernicus Marine account, for the ocean model (surface currents and tides). Keep `.env` readable by root only |
 | `FORECAST_KEEP_RUNS` | `2` | Published runs to keep |
 | `FORECAST_MAX_FHR` | `384` | Last forecast hour to ingest |
 | `FORECAST_DOWNLOAD_WORKERS` | `6` | Steps downloaded at once |

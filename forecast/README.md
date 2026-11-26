@@ -82,6 +82,9 @@ Semantics worth knowing:
   waves come from, clockwise from north, and are interpolated as angles. `wind_wave_height` and
   `swell_height` are 0 at sea when the model finds no wind sea or swell (their period and
   direction are then `null`).
+- **Tides** (the `ocean` model): `tides` lists the high and low waters within the timeseries' span,
+  each `{"time", "type": "high" | "low", "height"}`, the height in metres from mean sea level. They are
+  placed between the hours, so their times are not on the hour. See *Ocean currents and tides*.
 
 ## Models
 
@@ -92,7 +95,7 @@ Semantics worth knowing:
 | `ifs` | ECMWF's Integrated Forecasting System, the European physics model, from its 00 and 12 UTC runs, with sea state from ECMWF's wave model | 3-hourly to 6 days, then 6-hourly to 15 days | Temperature, dew point and humidity, 10 m and 100 m wind, the 10 m gust (strongest in the hour before), pressure, precipitation, total/low/middle/high cloud, CAPE (most unstable), precipitable water, solar radiation, soil moisture and temperature (0-7 cm), wave height, period and direction, and the indices. Its own land mask and terrain height |
 | `aifs` | ECMWF's AI model, AIFS Single, four runs a day | 6-hourly to 15 days | As IFS without gusts, CAPE, precipitable water and sea state |
 | `aerosols` | NOAA GEFS-Aerosols: air quality from NOAA's global aerosol model (GEFS v12 with GOCART), with fires from satellite detections | 3-hourly to 5 days, four runs a day | PM2.5, PM10, dust, and haze (aerosol optical depth) in total and from dust and smoke. See *Air quality* below |
-| `ocean` | Copernicus Marine's global ocean analysis and forecast (Mercator Ocean's GLO12 model, 1/12°), with tidal currents and wave drift. Needs a Copernicus Marine account | Hourly to 10 days, from a run once a day | Surface current, its speed and the direction it flows towards. See *Ocean currents* below |
+| `ocean` | Copernicus Marine's global ocean analysis and forecast (Mercator Ocean's GLO12 model, 1/12°), with tidal currents, wave drift and tides (FES2014). Needs a Copernicus Marine account | Hourly to 10 days, from a run once a day | Surface current, its speed and the direction it flows towards; tide height, and the times of high and low water. See *Ocean currents and tides* below |
 
 GFS arrives about 5 hours after each run starts, AIGFS on NOAA's AWS bucket about 8 hours after, IFS's
 last step about 7.5 hours after (twice a day), AIFS and GEFS-Aerosols about 6 hours after. ECMWF also
@@ -154,24 +157,43 @@ the inventory line names, so these variables also match it (`Variable.grib_extra
 nitrate or ozone, and as a 25 km average it misses sources a street away; the variable descriptions say
 so. Daily summaries: `pm25_mean`, `pm25_max`, `pm10_mean`, `aod_max`.
 
-### Ocean currents (`ocean`)
+### Ocean currents and tides (`ocean`)
 
-| Id | | Source (`cmems_mod_glo_phy_anfc_merged-uv_PT1H-i`) |
+| Id | | Source |
 |---|---|---|
-| `current_u`, `current_v` | Eastward and northward surface current, m/s | `utotal`, `vtotal` |
+| `current_u`, `current_v` | Eastward and northward surface current, m/s | `utotal`, `vtotal` in `cmems_mod_glo_phy_anfc_merged-uv_PT1H-i` |
 | `current_speed` | Its speed, m/s (computed) | |
 | `current_dir` | The direction it flows towards, clockwise from north (computed). Wind and wave directions say where those come from; currents, where they go | |
+| `tide_height` | Height of the tide above or below mean sea level, m | `ocean_tide` in `cmems_mod_glo_phy_anfc_merged-sl_PT1H-i` |
 
 The current is the total at the surface: the model's circulation, tidal currents (FES2014) and the drift
 waves cause (Stokes drift). The model's own currents have no tides, and in tidal straits and on shelves
-tides are most of the current, so this is the dataset to use. It is one rolling time series that
-Copernicus Marine rewrites daily, running about ten days past the newest forecast's start; that start is
-the run (the series' last hour less 239 hours, to 00 UTC), so the newest run begins about a day before it
-is ingested. Each hour is read through the `copernicusmarine` toolbox as the global 1/12° field (about
-42 MB, so about 10 GB a day) and kept at 0.25°, each point the mean of the 3 x 3 cells around it that are
-sea; the grid stops at 80° S. Like sea state, currents are sea only: a point forecast on a coast takes the
-nearest sea cell. The model is in the default `FORECAST_MODELS` only when `COPERNICUSMARINE_SERVICE_USERNAME`
-and `COPERNICUSMARINE_SERVICE_PASSWORD` are set. Daily summary: `current_speed_max`.
+tides are most of the current, so this is the dataset to use.
+
+The tide is the astronomical tide alone (FES2014), without the surge that wind and air pressure add. Its
+heights are from mean sea level, not from the chart datum (about the lowest tide) that tide tables use,
+so at a port they differ from its tide table by a constant; times and ranges compare. The dataset's total
+sea level is measured from the geoid instead, so the ocean's mean shape (a metre or so from place to
+place) would show as much as the tide; it is left out. A point forecast lists the high and low waters
+(`tides`), found from the hourly heights: a turn counts once the tide then moves 3 cm, and is placed
+between the hours by a parabola through the hours around it. Against NOAA's predictions over three days
+in November 2026, the times at Springmaid Pier, Santa Monica, Key West and Boston were within 5 minutes
+of NOAA's (the median of each station's highs and lows) and the heights within 1 to 10 cm. A station up
+an estuary or behind a headland sees the tide later than the 0.25° point offshore (San Francisco's,
+inside the Golden Gate, about half an hour), and a global model is less exact in harbours, estuaries and
+narrow bays: not for navigation. There is no daily tide summary, as the hourly values miss a large tide's
+high or low water by up to 10 cm; the `tides` are the day's highs and lows.
+
+Each dataset is one rolling time series that Copernicus Marine rewrites daily, running about ten days
+past the newest forecast's start (the tide a day further); that start is the run (the earlier series' last
+hour less 239 hours, to 00 UTC), so the newest run begins about a day before it is ingested. The hours are
+hourly means, each labelled with the hour it starts (the value at 03:00 is centred on 03:30), so each
+stored hour is interpolated from the four means around it. Each hour is read through the `copernicusmarine`
+toolbox as global 1/12° fields (about 42 MB for the two current components, and the tide one more field)
+and kept at 0.25°, each point the mean of the 3 x 3 cells around it that are sea; the grid stops at 80° S.
+Like sea state, currents and tides are sea only: a point forecast on a coast takes the nearest sea cell.
+The model is in the default `FORECAST_MODELS` only when `COPERNICUSMARINE_SERVICE_USERNAME` and
+`COPERNICUSMARINE_SERVICE_PASSWORD` are set. Daily summary: `current_speed_max`.
 
 **Fields** are the numbers behind the tiles, for clients that render, animate or analyse the data
 themselves (WebGL colour layers, wind particles, isobars). `vars` takes up to 4 variables, stored
@@ -341,8 +363,8 @@ DeepMind's GraphCast; NOAA releases its products under CC0 (`noaa-nws-graphcastg
 data: NOAA/NCEP, public domain (`noaa-gefs-pds`). IFS and AIFS data: © European Centre for
 Medium-Range Weather Forecasts (ECMWF), open data under CC BY 4.0; 4Shadow converts units, turns
 totals into rates and derives further variables, and every answer from these models carries the
-attribution in `source.attribution`. Ocean currents: generated using E.U. Copernicus Marine Service
-Information (https://doi.org/10.48670/moi-00016), under the Copernicus Marine Service licence, which
-allows commercial use; 4Shadow averages them onto 0.25° and derives speed and direction, and the
-attribution is in `source.attribution`. Place names: GeoNames (geonames.org), licensed under
+attribution in `source.attribution`. Ocean currents and tides: generated using E.U. Copernicus Marine
+Service Information (https://doi.org/10.48670/moi-00016), under the Copernicus Marine Service licence,
+which allows commercial use; 4Shadow averages them onto 0.25° and to the hour, derives current speed and
+direction and finds the high and low waters, and the attribution is in `source.attribution`. Place names: GeoNames (geonames.org), licensed under
 CC BY 4.0; responses that use them say so.
