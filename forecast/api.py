@@ -165,6 +165,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "valid_times": [iso(t) for t in r.valid_times],
             "variables": sorted(v.id for v in enabled_catalog(stores, model).available(r.variables)),
             "source": r.manifest.get("source", {}),
+            # Its points: row 0's latitude and column 0's longitude, and the spacing (0.25° for the weather
+            # models, 0.1° for satellite imagery), so a client can size its field requests.
+            "grid": r.grid.to_dict(),
         }
 
     @app.get("/v2/{model}/variables", tags=["meta"])
@@ -174,6 +177,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "model": model,
             "title": cat.title,
             "description": cat.description,
+            # Observations (satellite imagery): each run is one hour observed. Absent for forecasts.
+            **({"observed": True} if cat.observed else {}),
             "variables": [v.describe() for v in cat.variables.values()],
             "daily": [{"id": d.id, "source": d.source, "aggregation": d.how, "units": d.units} for d in cat.daily],
         }

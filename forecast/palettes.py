@@ -267,3 +267,27 @@ AEROSOL_OPTICAL_DEPTH = Palette(
     ),
     transparent_below=0.05,
 )
+
+# Satellite infrared (11 µm brightness temperature, °C): clear warm ground and sea fade out, cloud tops whiten
+# as they get colder and higher, and the coldest (below -60 °C, the tops of thunderstorms) are coloured as on
+# a forecaster's enhanced infrared picture.
+INFRARED_C = Palette(
+    (
+        (-88, "#7a1f5c"), (-80, "#e0402c"), (-73, "#f0b43c"), (-66, "#2f7fd6"), (-60, "#8fd3f0"), (-50, "#ffffff"),
+        (-25, "#e4e7ebee"), (-10, "#c3c8cecc"), (0, "#9aa1a999"), (8, "#7c838b55"), (16, "#62697118"),
+        (22, "#62697100"),
+    ),
+)
+
+# Satellite water vapour (6.7 µm brightness temperature, °C): moist upper air white and blue, dry air brown.
+WATER_VAPOUR_C = Palette(
+    (
+        (-75, "#ffffff"), (-60, "#c9e3f5"), (-50, "#6fa8dcf0"), (-42, "#3b6aa8d0"), (-35, "#2a3f6390"),
+        (-28, "#5a3d1e70"), (-20, "#8a5a2490"), (-10, "#b97a2ab0"),
+    ),
+)
+
+# Satellite visible brightness (0-255): the dark sea fades out, cloud and snow are white.
+VISIBLE = Palette(
+    ((0, "#00000000"), (25, "#30353b40"), (60, "#7d848c99"), (110, "#c4c9cee0"), (170, "#f2f4f6"), (230, "#ffffff")),
+)

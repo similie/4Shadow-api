@@ -42,6 +42,8 @@ class Source:
     # /v2/health calls a model's newest run stale after this many hours: its cycle, the hours until its
     # last step is published, and the ingest.
     stale_after_hours: float = 12.0
+    keep_runs: int | None = None  # published runs kept; None: FORECAST_KEEP_RUNS
+    gfs_static: bool = True  # take GFS's land mask and terrain height when it has none of its own
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,9 @@ class ArraySource:
     ``client()`` makes the reader: an object with ``latest_run(max_fhr)``, the newest run with that many
     hours (or None), and ``step(run, fhr, names, grid)``, the named variables at that step on ``grid`` (a
     dict of float32 arrays, NaN where missing), raising ``StepUnavailable`` when the step isn't there yet.
-    ``base_url`` is where a run's ``source`` record says the data came from.
+    ``base_url`` is where a run's ``source`` record says the data came from. A client that also has
+    ``available_runs()`` (the runs it can read, oldest first) is caught up on every one of those the store
+    lacks, not only the newest: observations, an hour a run, keep each hour.
     """
 
     model: str
@@ -63,3 +67,5 @@ class ArraySource:
     client: Callable[[], object]
     cycle_hours: tuple[int, ...] = (0,)
     stale_after_hours: float = 12.0
+    keep_runs: int | None = None  # published runs kept; None: FORECAST_KEEP_RUNS
+    gfs_static: bool = True  # take GFS's land mask and terrain height when it has none of its own
