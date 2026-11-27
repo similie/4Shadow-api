@@ -126,7 +126,7 @@ server {
 
 ## Monitoring
 
-`GET /v2/health` returns each model's latest run and its age, with `stale: true` when the newest run is more than 12 hours old. Its `status` is `ok` when every model has a run, `degraded` (still 200) when GFS has one but another model doesn't yet, and `unavailable` with a 503 when there is no GFS run. GFS runs start every 6 hours (00, 06, 12 and 18 UTC) and are published a few hours later, once every step is in. If runs stop arriving, `forecast-ingest.log` says why (NOAA delays, a missing file, disk space).
+`GET /v2/health` returns each model's latest run and its age, with `stale: true` when the newest run is more than 12 hours old (60 for the ocean, published daily; 3 for satellite imagery, hourly). Its `status` is `ok` when every model has a run, `degraded` (still 200) when GFS has one but another model doesn't yet, and `unavailable` with a 503 when there is no GFS run. GFS runs start every 6 hours (00, 06, 12 and 18 UTC) and are published a few hours later, once every step is in. If runs stop arriving, `forecast-ingest.log` says why (NOAA delays, a missing file, disk space).
 
 ## Settings
 
@@ -137,7 +137,7 @@ Environment variables, from the unit's `EnvironmentFile` (`.env` in the checkout
 | `FORECAST_DATA_ROOT` | `<checkout>/data/forecast` | Where runs are stored |
 | `FORECAST_MODELS` | every model; `ocean` only with a Copernicus Marine login | Models to serve and ingest; `gfs` alone serves GFS only. GFS is always included |
 | `COPERNICUSMARINE_SERVICE_USERNAME`, `COPERNICUSMARINE_SERVICE_PASSWORD` | none | A Copernicus Marine account, for the ocean model (surface currents and tides). Keep `.env` readable by root only |
-| `FORECAST_KEEP_RUNS` | `2` | Published runs to keep |
+| `FORECAST_KEEP_RUNS` | `2` | Published runs to keep. Satellite imagery keeps its last 24 hours (about 0.9 GB) whatever this says |
 | `FORECAST_MAX_FHR` | `384` | Last forecast hour to ingest |
 | `FORECAST_DOWNLOAD_WORKERS` | `6` | Steps downloaded at once |
 | `FORECAST_STEP_WAIT_SECONDS` | `0` | Pause between steps, to spread the load |

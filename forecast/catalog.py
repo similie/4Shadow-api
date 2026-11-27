@@ -234,6 +234,8 @@ class ModelCatalog:
     description: str = ""
     static: dict[str, StaticField] = field(default_factory=dict)
     daily: tuple[DailySpec, ...] = ()
+    # Observations, not a forecast (satellite imagery): each run is one hour observed, its only step.
+    observed: bool = False
 
     def stored_variables(self) -> list[Variable]:
         return [v for v in self.variables.values() if v.stored]
@@ -716,5 +718,38 @@ OCEAN = ModelCatalog(
 )
 
 
-CATALOGS: dict[str, ModelCatalog] = {c.model: c for c in (GFS, AIGFS, IFS, AIFS, AEROSOLS, OCEAN)}
+_SAT = (" From NOAA's hourly mosaic of the geostationary weather satellites (GOES, Meteosat, Himawari), 72.7° N to "
+        "72.7° S: each 0.1° cell is the mean of the 8 km pixels in it.")
+
+SATELLITE = ModelCatalog(
+    model="satellite",
+    title="NOAA GMGSI satellite imagery (hourly global mosaic)",
+    description=("Observed, not forecast: the geostationary weather satellites' images of the globe (GOES-East and "
+                 "-West, Meteosat, Himawari), blended each hour by NOAA (GMGSI), from 72.7° N to 72.7° S, stored at "
+                 "0.1°. Each hour is a run of one step at its own time, about an hour after it; the last 24 are "
+                 "kept. Infrared shows clouds day and night by how cold their tops are, water vapour the moisture "
+                 "of the upper air, visible the daylit side."),
+    observed=True,
+    variables=_vars(
+        Variable("sat_ir", "Infrared (cloud-top temperature)", "°C",
+                 "Temperature the 11 µm infrared window sees: the tops of clouds, colder the higher they reach "
+                 "(below -50 °C, the tops of thunderstorms and deep storms), and under a clear sky the ground or "
+                 "the sea, a few degrees colder than it is through moist air. Day and night." + _SAT,
+                 grib_param="LW", add=K_TO_C, valid=(-130, 70), decimals=1, palette=palettes.INFRARED_C),
+        Variable("sat_wv", "Water vapour", "°C",
+                 "Temperature the 6.7 µm water vapour channel sees: the moisture of the middle and upper air "
+                 "(about 3 to 10 km up). Cold, below -40 °C, is moist air high up; warm, above -25 °C, is dry air "
+                 "the channel sees down through. It shows jet streams, dry intrusions and storms where there is "
+                 "no cloud." + _SAT,
+                 grib_param="WV", add=K_TO_C, valid=(-130, 70), decimals=1, palette=palettes.WATER_VAPOUR_C),
+        Variable("sat_vis", "Visible", "1",
+                 "Brightness of the sunlight clouds and the ground reflect, 0 (dark) to 255 (brightest) as the "
+                 "mosaic gives it: thick cloud and snow are bright, the sea dark. Missing where it is night." + _SAT,
+                 grib_param="VIS", valid=(0, 255), decimals=0, palette=palettes.VISIBLE),
+    ),
+)
+
+
+CATALOGS: dict[str, ModelCatalog] = {c.model: c for c in (GFS, AIGFS, IFS, AIFS, AEROSOLS, OCEAN,
+                                                            SATELLITE)}
 

@@ -3,8 +3,9 @@
 A forecast for any point on Earth, plus map tiles, from open numerical weather prediction
 data. Six models today: NOAA GFS 0.25° with sea state from GFS-Wave, NOAA's AI model AIGFS, ECMWF's
 IFS (with sea state) and AI model AIFS, NOAA GEFS-Aerosols for air quality, and surface currents with
-tides from Copernicus Marine. The store and API are model-agnostic, and every model is stored on the same
-0.25° grid.
+tides from Copernicus Marine; and satellite imagery, observed rather than forecast, from NOAA's hourly
+mosaic of the geostationary satellites. The store and API are model-agnostic, and every model is stored
+on the same 0.25° grid (satellite imagery at 0.1°).
 
 ```
 NOAA S3 (.idx + byte ranges) ──► ingest ──► data/forecast/gfs/runs/<run>/*.npy ──► API (/v2)
@@ -85,6 +86,8 @@ Semantics worth knowing:
 - **Tides** (the `ocean` model): `tides` lists the high and low waters within the timeseries' span,
   each `{"time", "type": "high" | "low", "height"}`, the height in metres from mean sea level. They are
   placed between the hours, so their times are not on the hour. See *Ocean currents and tides*.
+- **Satellite imagery** (the `satellite` model): each run is one hour observed, so a point "forecast"
+  gives the newest image's values at the point (an older hour with `run=`). See *Satellite imagery*.
 
 ## Models
 
@@ -96,6 +99,7 @@ Semantics worth knowing:
 | `aifs` | ECMWF's AI model, AIFS Single, four runs a day | 6-hourly to 15 days | As IFS without gusts, CAPE, precipitable water and sea state |
 | `aerosols` | NOAA GEFS-Aerosols: air quality from NOAA's global aerosol model (GEFS v12 with GOCART), with fires from satellite detections | 3-hourly to 5 days, four runs a day | PM2.5, PM10, dust, and haze (aerosol optical depth) in total and from dust and smoke. See *Air quality* below |
 | `ocean` | Copernicus Marine's global ocean analysis and forecast (Mercator Ocean's GLO12 model, 1/12°), with tidal currents, wave drift and tides (FES2014). Needs a Copernicus Marine account | Hourly to 10 days, from a run once a day | Surface current, its speed and the direction it flows towards; tide height, and the times of high and low water. See *Ocean currents and tides* below |
+| `satellite` | Observed, not forecast: NOAA's Global Mosaic of Geostationary Satellite Imagery (GMGSI), the images of GOES-East and -West, Meteosat and Himawari blended each hour, at 0.1° | One run per hour observed, its only step; the last 24 are kept | Infrared (cloud-top temperature), water vapour, visible. See *Satellite imagery* below |
 
 GFS arrives about 5 hours after each run starts, AIGFS on NOAA's AWS bucket about 8 hours after, IFS's
 last step about 7.5 hours after (twice a day), AIFS and GEFS-Aerosols about 6 hours after. ECMWF also
@@ -195,9 +199,41 @@ Like sea state, currents and tides are sea only: a point forecast on a coast tak
 The model is in the default `FORECAST_MODELS` only when `COPERNICUSMARINE_SERVICE_USERNAME` and
 `COPERNICUSMARINE_SERVICE_PASSWORD` are set. Daily summary: `current_speed_max`.
 
+### Satellite imagery (`satellite`)
+
+NOAA blends the newest images of the geostationary weather satellites (GOES-East and -West, Meteosat at
+0° and over the Indian Ocean, Himawari) into one picture of the globe each hour, from 72.7° N to 72.7° S
+at about 8 km, and publishes it on its open-data bucket on AWS (`noaa-gmgsi-pds`) some 40 minutes after
+the hour, a NetCDF file per band. The `satellite` model reads three bands. It is observations, not a
+forecast: each hour is a run of one step at its own time, the variables response says `"observed": true`,
+and the newest image is about an hour old. The store keeps the last 24 hours (`ArraySource.keep_runs`,
+whatever `FORECAST_KEEP_RUNS` says), and the ingest catches up every hour of the last day it lacks, the
+newest first, so hours held up behind another model's long ingest still arrive.
+
+| Id | | Band |
+|---|---|---|
+| `sat_ir` | Infrared brightness temperature, °C: cloud tops by how cold they are, day and night, and under a clear sky the ground or sea | `LW`, the infrared window (about 11 µm) |
+| `sat_wv` | Water vapour brightness temperature, °C: the moisture of the middle and upper air (cold is moist air high up) | `WV` (about 6.7 µm) |
+| `sat_vis` | Visible brightness, 0 (dark) to 255 (brightest), as the mosaic gives it; missing at night | `VIS` |
+
+The mosaic's values are 0-255 brightness on McIDAS's scale. For the infrared bands that's a temperature:
+330 - B/2 kelvin up to 176 (242 K), then 418 - B. Checked against GFS's 2 m temperature where GFS has no
+cloud, the clear sea reads a median 4.3 K colder, as an 11 µm channel does through moist air. NOAA
+doesn't document the visible band's scale, so it is served as given. Pixels the quality flag doesn't mark
+good are missing (the night side in the visible band, and seams between satellites), and so is everything
+that every satellite sees more than 78° from straight down: there the picture is smeared and in places
+impossibly cold (down to -108 °C off Antarctica, where real storm tops stop near -90 °C). That leaves the
+poles and the gaps between satellites beyond about 60° to 70° empty. The mosaic is on a Mercator grid;
+each 0.1° cell is the mean of the pixels whose centres fall in it.
+
+A run's detail (`/v2/{model}/runs/{run}`) gives its `grid`, so a client can size its field requests: at
+0.1°, the stride for the same detail as stride 2 on the weather models is 5. An hour is 39 MB stored
+(three bands) and about 18 MB to download.
+
 **Fields** are the numbers behind the tiles, for clients that render, animate or analyse the data
 themselves (WebGL colour layers, wind particles, isobars). `vars` takes up to 4 variables, stored
-(`u10,v10`) or computed (`wet_bulb`, `fire_weather`: worked out on the requested cells), `stride` thins the grid (1 = 0.25°, 2 = 0.5°, 4 = 1°) and
+(`u10,v10`) or computed (`wet_bulb`, `fire_weather`: worked out on the requested cells), `stride` thins the grid (on the weather models' 0.25° grid 1 = 0.25°, 2 = 0.5°, 4 = 1°;
+satellite imagery's grid is 0.1°) and
 `bbox=west,south,east,north` crops it (east < west crosses the antimeridian); the default is the
 whole globe, starting at -180. The body is format "4SF1": `"4SF1"`, a uint32 LE header length, a
 JSON header (grid, valid time, per-variable units/scale/offset), then one int16 LE array per
@@ -305,7 +341,8 @@ can read it: `np.load("t2m.npy", mmap_mode="r")`. Runs are written to `<run>.inc
 and renamed into place, then `latest.json` is replaced atomically, so readers never see a
 partial run. The newest `FORECAST_KEEP_RUNS` runs are kept (default 2). A full GFS run with sea
 state is about 15 GB, an IFS run about 3.8 GB, an AIFS run 2 GB, an AIGFS run 1.2 GB, an ocean run 1 GB and
-a GEFS-Aerosols run 0.6 GB (about 2 MB per variable and step).
+a GEFS-Aerosols run 0.6 GB (about 2 MB per variable and step). Satellite imagery keeps its last 24 hours,
+39 MB each: about 0.9 GB.
 
 ## Adding a variable
 
@@ -366,5 +403,9 @@ totals into rates and derives further variables, and every answer from these mod
 attribution in `source.attribution`. Ocean currents and tides: generated using E.U. Copernicus Marine
 Service Information (https://doi.org/10.48670/moi-00016), under the Copernicus Marine Service licence,
 which allows commercial use; 4Shadow averages them onto 0.25° and to the hour, derives current speed and
-direction and finds the high and low waters, and the attribution is in `source.attribution`. Place names: GeoNames (geonames.org), licensed under
+direction and finds the high and low waters, and the attribution is in `source.attribution`. Satellite
+imagery: NOAA's Global Mosaic of Geostationary Satellite Imagery (GMGSI, NOAA/NESDIS), from GOES (NOAA),
+Meteosat (EUMETSAT) and Himawari (JMA) data, through the NOAA Open Data Dissemination program on AWS
+(`noaa-gmgsi-pds`), whose terms say it "can be used as desired" and ask for credit; 4Shadow averages it onto
+0.1° and leaves out what the satellites see too obliquely, and the attribution is in `source.attribution`. Place names: GeoNames (geonames.org), licensed under
 CC BY 4.0; responses that use them say so.

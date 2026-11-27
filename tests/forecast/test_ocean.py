@@ -88,7 +88,7 @@ def test_the_ocean_is_served_by_default_only_with_a_login(monkeypatch):
     assert "ocean" not in config.get_settings().models
     for key in copernicus_marine.CREDENTIALS:
         monkeypatch.setenv(key, "x")
-    assert config.get_settings().models[-1] == "ocean"
+    assert "ocean" in config.get_settings().models
     monkeypatch.setenv("FORECAST_MODELS", "gfs,aerosols")
     assert "ocean" not in config.get_settings().models
 

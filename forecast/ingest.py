@@ -32,7 +32,7 @@ from .config import Settings, get_settings
 from .sources import SOURCES, ArraySource, gfs
 from .sources.base import StepUnavailable
 from .sources.gfs import FcstSpec, GribClient, IdxRecord
-from .store import RunStore, RunWriter, parse_run_id, prune_runs, read_latest, run_id
+from .store import RunStore, RunWriter, parse_run_id, prune_runs, published_runs, read_latest, run_id
 
 log = logging.getLogger("forecast.ingest")
 
@@ -206,15 +206,22 @@ def _hours(settings: Settings, model: str, max_fhr: int | None) -> int:
     return min(settings.max_fhr if max_fhr is None else max_fhr, SOURCES[model].max_fhr)
 
 
+def keep_runs(settings: Settings, model: str) -> int:
+    """How many published runs of a model to keep: its source's own number, else FORECAST_KEEP_RUNS."""
+    return SOURCES[model].keep_runs or settings.keep_runs
+
+
 def _finish(writer: RunWriter, catalog: ModelCatalog, settings: Settings, t0: float) -> None:
-    """Give a model without its own land mask and terrain GFS's (same grid), then publish the run."""
-    if not catalog.static and catalog.model != GFS.model:
+    """Give a model without its own land mask and terrain GFS's (same grid), unless it does without them
+    (satellite imagery), then publish the run."""
+    if not catalog.static and catalog.model != GFS.model and SOURCES[catalog.model].gfs_static:
         gfs_run = RunStore(settings.data_root, GFS.model).get()
         copied = writer.copy_static_from(gfs_run, f"gfs run {gfs_run.id}") if gfs_run else []
         if not copied:
             log.warning("%s run %s has no land mask or terrain height: no GFS run on the same grid to take them from",
                         catalog.model, writer.id)
-    writer.publish(keep_runs=settings.keep_runs, extra={"ingest_seconds": round(time.monotonic() - t0, 1)})
+    writer.publish(keep_runs=keep_runs(settings, catalog.model),
+                   extra={"ingest_seconds": round(time.monotonic() - t0, 1)})
 
 
 def ingest_array_run(run: datetime, settings: Settings, client=None, catalog: ModelCatalog = GFS,
@@ -304,6 +311,8 @@ def ingest_latest(settings: Settings, client: GribClient | None = None, catalog:
                   max_fhr: int | None = None, force: bool = False) -> str | None:
     client = client or client_for(settings, catalog.model)
     max_fhr = _hours(settings, catalog.model, max_fhr)
+    if not force and hasattr(client, "available_runs"):
+        return ingest_missing(settings, client, catalog, max_fhr)
     if isinstance(SOURCES[catalog.model], ArraySource):
         candidate = client.latest_run(max_fhr)
     else:
@@ -317,6 +326,28 @@ def ingest_latest(settings: Settings, client: GribClient | None = None, catalog:
         log.info("Up to date (latest published run %s)", current)
         return None
     return ingest_run(candidate, settings, client, catalog, max_fhr)
+
+
+def ingest_missing(settings: Settings, client, catalog: ModelCatalog, max_fhr: int) -> str | None:
+    """Every run the client can read, among the newest the store keeps, that the store lacks: the newest
+    first, so it's out soonest. Hours another model's long ingest held up are caught up, and one that fails
+    doesn't hold up the others (they're tried again on the next poll). Returns the newest run ingested."""
+    model_root = settings.data_root / catalog.model
+    have = set(published_runs(model_root))
+    wanted = client.available_runs()[-keep_runs(settings, catalog.model):]
+    missing = [r for r in reversed(wanted) if run_id(r) not in have]
+    if not missing:
+        log.info("Up to date (latest published run %s)", read_latest(model_root))
+        return None
+    newest = None
+    for run in missing:
+        try:
+            rid = ingest_run(run, settings, client, catalog, max_fhr)
+        except Exception:
+            log.exception("%s run %s failed; the others go on", catalog.model, run_id(run))
+            continue
+        newest = newest or rid
+    return newest
 
 
 @contextmanager
@@ -360,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
                         ingest_run(parse_run_id(args.run), settings, catalog=catalog, max_fhr=args.max_fhr)
                     else:
                         ingest_latest(settings, catalog=catalog, max_fhr=args.max_fhr, force=args.force)
-                    prune_runs(model_root, settings.keep_runs)
+                    prune_runs(model_root, keep_runs(settings, model))
                 except Exception:
                     log.exception("%s ingest failed", model)
                     failed = True
