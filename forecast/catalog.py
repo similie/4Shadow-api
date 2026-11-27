@@ -19,8 +19,10 @@ they are read, from stored ones, so they cost no storage and work everywhere a s
 point forecasts, tiles and threshold checks. Their formulas are in ``derive`` below.
 
 Each model has its own catalog: GFS; AIGFS (NOAA's AI model, fewer variables, 6-hourly); IFS and AIFS
-(ECMWF's physics and AI models, from its open data); GEFS-Aerosols (air quality); and the ocean (surface
-currents and tides, from Copernicus Marine, whose "GRIB selector" is the variable's name in its dataset). A variable keeps
+(ECMWF's physics and AI models, from its open data); GEFS-Aerosols (air quality); CAMS (air quality with the
+gases and an AQI, whose "GRIB selector" is the short name its client returns); the ocean (surface
+currents and tides, from Copernicus Marine, whose "GRIB selector" is the variable's name in its dataset);
+and satellite imagery. A variable keeps
 the same id, units and meaning in every model that has it, so clients can ask any model for ``t2m``.
 For ECMWF's files the GRIB selector is its short name (``2t``) and level type (``sfc``, ``sol:1``).
 """
@@ -680,6 +682,68 @@ AEROSOLS = ModelCatalog(
 )
 
 
+# --------------------------------------------------------------------------- CAMS (air quality)
+
+_CAMS = (" From the CAMS global forecast's lowest level, about 10 m above the ground: the average over a 40 km "
+         "cell, which misses a busy road or a chimney nearby and a city's streets.")
+_GAS = "CAMS reports the gases as mass mixing ratios; they're turned into µg/m³ with the air's density there."
+
+AIR = ModelCatalog(
+    model="air",
+    title="CAMS global atmospheric composition 0.4° (air quality)",
+    description=("Air quality from the Copernicus Atmosphere Monitoring Service's global forecast (ECMWF's model "
+                 "with atmospheric chemistry, about 40 km): nitrogen dioxide, carbon monoxide, ozone, sulphur "
+                 "dioxide, PM2.5 and PM10 near the ground, and the US Air Quality Index made from them, hourly "
+                 "to 5 days, two runs a day."),
+    variables=_vars(
+        Variable("no2", "Nitrogen dioxide (NO2)", "µg/m³",
+                 "Nitrogen dioxide in the air near the ground, mostly from traffic, power stations and industry; it "
+                 "inflames the airways. The WHO's 24-hour guideline is 25 µg/m³; 200 over an hour is the EU's limit."
+                 + _CAMS + " " + _GAS,
+                 grib_param="no2", clip=(0, None), scale=0.1, decimals=1, palette=palettes.NO2_UGM3),
+        Variable("co", "Carbon monoxide (CO)", "µg/m³",
+                 "Carbon monoxide in the air near the ground, from fires and burning fuel. Clean air has about "
+                 "100 µg/m³; the WHO's 24-hour guideline is 4000 µg/m³ (4 mg/m³). Its plumes show smoke from fires "
+                 "far downwind." + _CAMS + " " + _GAS,
+                 grib_param="co", clip=(0, None), scale=1.0, decimals=0, palette=palettes.CO_UGM3),
+        Variable("o3", "Ozone (O3)", "µg/m³",
+                 "Ozone in the air near the ground, made by sunlight from other pollution, so highest on sunny "
+                 "afternoons downwind of cities. The WHO's 8-hour guideline is 100 µg/m³." + _CAMS + " " + _GAS,
+                 grib_param="go3", clip=(0, None), scale=0.1, decimals=0, palette=palettes.O3_UGM3),
+        Variable("so2", "Sulphur dioxide (SO2)", "µg/m³",
+                 "Sulphur dioxide in the air near the ground, from burning coal and oil, smelters and volcanoes. "
+                 "The WHO's 24-hour guideline is 40 µg/m³." + _CAMS + " " + _GAS,
+                 grib_param="so2", clip=(0, None), scale=0.1, decimals=1, palette=palettes.SO2_UGM3),
+        Variable("pm25", "PM2.5", "µg/m³",
+                 "Fine particles under 2.5 µm in the air near the ground: smoke, dust, sea salt, sulphate, nitrate "
+                 "and other haze, the particles that harm health most. The WHO's 24-hour guideline is 15 µg/m³."
+                 + _CAMS,
+                 grib_param="pm2p5", clip=(0, None), scale=0.1, decimals=0, palette=palettes.PM25_UGM3),
+        Variable("pm10", "PM10", "µg/m³",
+                 "Particles under 10 µm in the air near the ground, including coarse dust and sea salt. The WHO's "
+                 "24-hour guideline is 45 µg/m³." + _CAMS,
+                 grib_param="pm10", clip=(0, None), scale=0.5, decimals=0, palette=palettes.PM10_UGM3),
+        Variable("aqi", "Air Quality Index (US)", "1",
+                 "The US EPA's Air Quality Index, from this forecast's PM2.5, PM10, ozone, carbon monoxide, nitrogen "
+                 "dioxide and sulphur dioxide, each averaged as the index wants it (the particles over the last 24 "
+                 "hours, ozone and carbon monoxide over the last 8, the others the hour's), and the highest of "
+                 "their indices. 0-50 good, 51-100 moderate, 101-150 unhealthy for sensitive groups, 151-200 "
+                 "unhealthy, 201-300 very unhealthy, 301 and over hazardous. In a forecast's first day the averages "
+                 "start at its first hour. Desert dust and sea salt count as particles: a dust storm reads hazardous, and "
+                 "a windy sea can read moderate." + _CAMS,
+                 grib_param="aqi", clip=(0, None), scale=1.0, decimals=0, palette=palettes.AQI),
+    ),
+    daily=(
+        DailySpec("aqi_max", "aqi", "max", "1", decimals=0),
+        DailySpec("no2_mean", "no2", "mean", "µg/m³", decimals=1),
+        DailySpec("co_mean", "co", "mean", "µg/m³", decimals=0),
+        DailySpec("o3_max", "o3", "max", "µg/m³", decimals=0),
+        DailySpec("pm25_mean", "pm25", "mean", "µg/m³", decimals=0),
+        DailySpec("pm10_mean", "pm10", "mean", "µg/m³", decimals=0),
+    ),
+)
+
+
 _TOTAL = "the ocean's circulation, tidal currents and the drift waves cause, combined"
 
 OCEAN = ModelCatalog(
@@ -750,6 +814,6 @@ SATELLITE = ModelCatalog(
 )
 
 
-CATALOGS: dict[str, ModelCatalog] = {c.model: c for c in (GFS, AIGFS, IFS, AIFS, AEROSOLS, OCEAN,
+CATALOGS: dict[str, ModelCatalog] = {c.model: c for c in (GFS, AIGFS, IFS, AIFS, AEROSOLS, AIR, OCEAN,
                                                             SATELLITE)}
 

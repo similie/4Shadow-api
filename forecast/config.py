@@ -11,10 +11,11 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv())
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-KNOWN_MODELS = ("gfs", "aigfs", "ifs", "aifs", "aerosols", "ocean", "satellite")
+KNOWN_MODELS = ("gfs", "aigfs", "ifs", "aifs", "aerosols", "air", "ocean", "satellite")
 # Models read with an account, by the environment variables that hold its login. Without them a model is
 # left out of the default FORECAST_MODELS (it couldn't be ingested); listing it there turns it on anyway.
-ACCOUNT_MODELS = {"ocean": ("COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD")}
+ACCOUNT_MODELS = {"air": ("CDSAPI_KEY",),
+                  "ocean": ("COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD")}
 
 
 def default_models() -> str:

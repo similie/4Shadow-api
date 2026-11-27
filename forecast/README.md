@@ -1,11 +1,11 @@
 # Foreshadow Forecast v2
 
 A forecast for any point on Earth, plus map tiles, from open numerical weather prediction
-data. Six models today: NOAA GFS 0.25° with sea state from GFS-Wave, NOAA's AI model AIGFS, ECMWF's
-IFS (with sea state) and AI model AIFS, NOAA GEFS-Aerosols for air quality, and surface currents with
-tides from Copernicus Marine; and satellite imagery, observed rather than forecast, from NOAA's hourly
-mosaic of the geostationary satellites. The store and API are model-agnostic, and every model is stored
-on the same 0.25° grid (satellite imagery at 0.1°).
+data. Seven models today: NOAA GFS 0.25° with sea state from GFS-Wave, NOAA's AI model AIGFS, ECMWF's
+IFS (with sea state) and AI model AIFS, NOAA GEFS-Aerosols and Copernicus's CAMS for air quality, and
+surface currents with tides from Copernicus Marine; and satellite imagery, observed rather than forecast,
+from NOAA's hourly mosaic of the geostationary satellites. The store and API are model-agnostic, and every
+model is stored on the same 0.25° grid (CAMS on its own 0.4° grid, satellite imagery at 0.1°).
 
 ```
 NOAA S3 (.idx + byte ranges) ──► ingest ──► data/forecast/gfs/runs/<run>/*.npy ──► API (/v2)
@@ -98,11 +98,13 @@ Semantics worth knowing:
 | `ifs` | ECMWF's Integrated Forecasting System, the European physics model, from its 00 and 12 UTC runs, with sea state from ECMWF's wave model | 3-hourly to 6 days, then 6-hourly to 15 days | Temperature, dew point and humidity, 10 m and 100 m wind, the 10 m gust (strongest in the hour before), pressure, precipitation, total/low/middle/high cloud, CAPE (most unstable), precipitable water, solar radiation, soil moisture and temperature (0-7 cm), wave height, period and direction, and the indices. Its own land mask and terrain height |
 | `aifs` | ECMWF's AI model, AIFS Single, four runs a day | 6-hourly to 15 days | As IFS without gusts, CAPE, precipitable water and sea state |
 | `aerosols` | NOAA GEFS-Aerosols: air quality from NOAA's global aerosol model (GEFS v12 with GOCART), with fires from satellite detections | 3-hourly to 5 days, four runs a day | PM2.5, PM10, dust, and haze (aerosol optical depth) in total and from dust and smoke. See *Air quality* below |
+| `air` | CAMS: the Copernicus Atmosphere Monitoring Service's global forecast of atmospheric composition (ECMWF's IFS with chemistry, about 40 km), stored on its 0.4° grid. Needs an Atmosphere Data Store account | Hourly to 5 days, two runs a day | Nitrogen dioxide, carbon monoxide, ozone, sulphur dioxide, PM2.5 and PM10 near the ground, and the US Air Quality Index from them. See *Air quality with gases and an index* below |
 | `ocean` | Copernicus Marine's global ocean analysis and forecast (Mercator Ocean's GLO12 model, 1/12°), with tidal currents, wave drift and tides (FES2014). Needs a Copernicus Marine account | Hourly to 10 days, from a run once a day | Surface current, its speed and the direction it flows towards; tide height, and the times of high and low water. See *Ocean currents and tides* below |
 | `satellite` | Observed, not forecast: NOAA's Global Mosaic of Geostationary Satellite Imagery (GMGSI), the images of GOES-East and -West, Meteosat and Himawari blended each hour, at 0.1° | One run per hour observed, its only step; the last 24 are kept | Infrared (cloud-top temperature), water vapour, visible. See *Satellite imagery* below |
 
 GFS arrives about 5 hours after each run starts, AIGFS on NOAA's AWS bucket about 8 hours after, IFS's
-last step about 7.5 hours after (twice a day), AIFS and GEFS-Aerosols about 6 hours after. ECMWF also
+last step about 7.5 hours after (twice a day), AIFS and GEFS-Aerosols about 6 hours after, CAMS about
+10 hours after (twice a day), plus the time the Atmosphere Data Store takes to prepare it. ECMWF also
 publishes IFS runs at 06 and 18 UTC, but only to 6 days, so the newest IFS run is always a 15-day one.
 With 6-hourly steps, AIGFS's and AIFS's daily highs and lows are of four values a day and can miss the
 peak. AIGFS's source files list fewer fields than GFS's and NCEP says their contents may change; a field
@@ -160,6 +162,51 @@ Several messages in these files share a parameter and level and differ only in t
 the inventory line names, so these variables also match it (`Variable.grib_extra`). The model has no
 nitrate or ozone, and as a 25 km average it misses sources a street away; the variable descriptions say
 so. Daily summaries: `pm25_mean`, `pm25_max`, `pm10_mean`, `aod_max`.
+
+### Air quality with gases and an index (`air`)
+
+The Copernicus Atmosphere Monitoring Service's global forecast (CAMS: ECMWF's IFS with atmospheric
+chemistry, about 40 km, https://doi.org/10.24381/04a0b097) runs from 00 and 12 UTC, hourly to 5 days, on a
+0.4° grid that is stored as it is. It comes from the Atmosphere Data Store (ADS), which needs a free
+account: `CDSAPI_KEY` is its API token (`CDSAPI_URL` only for another server), and the dataset's licence is
+accepted once on its page (*CAMS global atmospheric composition forecasts*, Download tab).
+
+| Id | | Source (ADS variable) |
+|---|---|---|
+| `aqi` | The US EPA's Air Quality Index (below). Tiles use its categories' colours | Computed at ingest |
+| `no2` | Nitrogen dioxide near the ground, µg/m³ | `nitrogen_dioxide`, lowest model level |
+| `co` | Carbon monoxide, µg/m³ | `carbon_monoxide`, lowest level |
+| `o3` | Ozone, µg/m³ | `ozone`, lowest level |
+| `so2` | Sulphur dioxide, µg/m³ | `sulphur_dioxide`, lowest level |
+| `pm25` | PM2.5 near the ground, µg/m³ | `particulate_matter_2.5um` |
+| `pm10` | PM10 near the ground, µg/m³ | `particulate_matter_10um` |
+
+The gases are mass mixing ratios at the model's lowest level (level 137, about 10 m above the ground).
+With that level's temperature and pressure (the surface pressure times the level's share of it, from the
+files' own level coefficients) they become µg/m³, using the density of dry air: moist air is up to about
+1.5% lighter, well inside the model's own uncertainty. `pm25` and `pm10` have the same ids and meaning as
+GEFS-Aerosols', so the two can be compared; CAMS's include nitrate and secondary organic particles.
+
+**The AQI** (`forecast/aqi.py`) follows EPA's Technical Assistance Document for the Reporting of Daily Air
+Quality (EPA-403/B-26-003, May 2026): each pollutant's concentration, averaged over its own window and
+truncated, is scaled between the breakpoints of its Table 6, and the AQI is the highest of the pollutants'
+indices. Every hour of the forecast gets one: PM2.5 and PM10 over the last 24 hours, ozone and carbon
+monoxide over the last 8 (ozone's 1-hour value counts too from 0.125 ppm, when its index is the higher),
+nitrogen and sulphur dioxide the hour's (sulphur dioxide over 304 ppb takes its 24-hour mean, as the
+document says). The gases' ppb come from their mass mixing ratios and molar masses. A forecast has no
+hours before its first, so in its first day the averages start there. Above 500 the last segment goes
+on, as the document says. Desert dust and sea salt count as particles: a dust storm reads hazardous, and a
+windy sea can read moderate (since 2024 EPA's "good" PM2.5 stops at 9 µg/m³). Daily summaries: `aqi_max`,
+`no2_mean`, `co_mean`, `o3_max`, `pm25_mean`, `pm10_mean`.
+
+**Getting a run.** The ADS prepares each request in a queue, from under a minute to an hour or more. The
+ingest asks for the newest run the dataset's constraints list (looking no sooner than 6 hours after a run
+starts) on one poll and goes on with the other models; a later poll downloads it, every hour of the eight
+fields it needs (about 800 MB, into the model's `.ads` folder), reads it and deletes it. The request's id
+is kept there, so a restart carries on with it. As the ADS asks of automated clients, there is one request
+at a time, checked against the dataset's constraints, and a failed one is asked again only after an hour,
+then two; after three failures the run is left for the next one. A download that breaks off is tried again
+on the next poll. A run is about 0.7 GB stored.
 
 ### Ocean currents and tides (`ocean`)
 
@@ -235,7 +282,7 @@ themselves (WebGL colour layers, wind particles, isobars). `vars` takes up to 4 
 (`u10,v10`) or computed (`wet_bulb`, `fire_weather`: worked out on the requested cells), `stride` thins the grid (on the weather models' 0.25° grid 1 = 0.25°, 2 = 0.5°, 4 = 1°;
 satellite imagery's grid is 0.1°) and
 `bbox=west,south,east,north` crops it (east < west crosses the antimeridian); the default is the
-whole globe, starting at -180. The body is format "4SF1": `"4SF1"`, a uint32 LE header length, a
+whole globe, starting at -180. CAMS's grid is 0.4°: stride 1 there is about as fine as stride 2 on 0.25°. The body is format "4SF1": `"4SF1"`, a uint32 LE header length, a
 JSON header (grid, valid time, per-variable units/scale/offset), then one int16 LE array per
 variable, rows north to south, starting on an 8-byte boundary. `value = raw * scale + offset`,
 `-32768` = missing. A global 0.5° wind field (u10 + v10) is about 1 MB; `forecast.fields.decode_field`
@@ -341,7 +388,7 @@ can read it: `np.load("t2m.npy", mmap_mode="r")`. Runs are written to `<run>.inc
 and renamed into place, then `latest.json` is replaced atomically, so readers never see a
 partial run. The newest `FORECAST_KEEP_RUNS` runs are kept (default 2). A full GFS run with sea
 state is about 15 GB, an IFS run about 3.8 GB, an AIFS run 2 GB, an AIGFS run 1.2 GB, an ocean run 1 GB and
-a GEFS-Aerosols run 0.6 GB (about 2 MB per variable and step). Satellite imagery keeps its last 24 hours,
+a CAMS run 0.7 GB, a GEFS-Aerosols run 0.6 GB (about 2 MB per variable and step). Satellite imagery keeps its last 24 hours,
 39 MB each: about 0.9 GB.
 
 ## Adding a variable
@@ -364,7 +411,9 @@ the existing client unchanged; `forecast/sources/aigfs.py` is the example. Anoth
 sets `index_url` and `parse_index` on the source (`forecast/sources/ecmwf.py`), and a global field on
 the same grid spacing that starts at another longitude is turned at decoding. A model read through a
 data service's own client rather than as GRIB files is an `ArraySource` (`forecast/sources/copernicus_marine.py`):
-its client finds the newest run and returns each step's arrays on the source's grid. The API serves every model
+its client finds the newest run and returns each step's arrays on the source's grid. A client whose data
+service queues requests (`forecast/sources/cams.py`) also has `prepare(run, hours)`, which raises
+`RunPending` until the run is ready, so the ingest moves on to the other models meanwhile. The API serves every model
 in `FORECAST_MODELS` under `/v2/{model}/...` (its point forecast at `/v2/{model}/forecast`), and the ingest reads them one after the other.
 
 ## Configuration
@@ -372,8 +421,10 @@ in `FORECAST_MODELS` under `/v2/{model}/...` (its point forecast at `/v2/{model}
 | Env var | Default | |
 |---|---|---|
 | `FORECAST_DATA_ROOT` | `<repo>/data/forecast` | Store location |
-| `FORECAST_MODELS` | every model; `ocean` only with a Copernicus Marine login | Models to serve and ingest. GFS is always included |
+| `FORECAST_MODELS` | every model; `ocean` only with a Copernicus Marine login, `air` only with an ADS key | Models to serve and ingest. GFS is always included |
 | `COPERNICUSMARINE_SERVICE_USERNAME`, `COPERNICUSMARINE_SERVICE_PASSWORD` | none | A Copernicus Marine account (free, at data.marine.copernicus.eu), for the ocean model |
+| `CDSAPI_KEY` | none | An Atmosphere Data Store API token (free, at ads.atmosphere.copernicus.eu), for CAMS air quality (`air`) |
+| `CDSAPI_URL` | `https://ads.atmosphere.copernicus.eu/api` | The data store's API, if not the ADS |
 | `GFS_BASE_URL` | NOAA's bucket on AWS | Where GFS comes from (a mirror, for example) |
 | `AIGFS_BASE_URL` | NOAA's bucket on AWS | Where AIGFS comes from; NOMADS is earlier but rate-limited |
 | `IFS_BASE_URL`, `AIFS_BASE_URL` | ECMWF's Google Cloud mirror | Where ECMWF's open data comes from; also on AWS (`https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com`) and at `https://data.ecmwf.int/forecasts` |
@@ -403,7 +454,11 @@ totals into rates and derives further variables, and every answer from these mod
 attribution in `source.attribution`. Ocean currents and tides: generated using E.U. Copernicus Marine
 Service Information (https://doi.org/10.48670/moi-00016), under the Copernicus Marine Service licence,
 which allows commercial use; 4Shadow averages them onto 0.25° and to the hour, derives current speed and
-direction and finds the high and low waters, and the attribution is in `source.attribution`. Satellite
+direction and finds the high and low waters, and the attribution is in `source.attribution`. CAMS air
+quality: contains modified Copernicus Atmosphere Monitoring Service information (CAMS global atmospheric
+composition forecasts, https://doi.org/10.24381/04a0b097), under CC BY 4.0, with ECMWF's notice that neither
+the European Commission nor ECMWF is responsible for any use made of it; 4Shadow turns the gases into µg/m³
+and works out the US AQI, and the attribution is in `source.attribution`. Satellite
 imagery: NOAA's Global Mosaic of Geostationary Satellite Imagery (GMGSI, NOAA/NESDIS), from GOES (NOAA),
 Meteosat (EUMETSAT) and Himawari (JMA) data, through the NOAA Open Data Dissemination program on AWS
 (`noaa-gmgsi-pds`), whose terms say it "can be used as desired" and ask for credit. Meteosat's hourly images

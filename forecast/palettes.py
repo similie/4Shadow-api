@@ -258,6 +258,48 @@ PM10_UGM3 = Palette(
     transparent_below=5,
 )
 
+# The US EPA's Air Quality Index in its own colours, as PM2.5's above: each category's colour reached at the
+# top of its range (good, moderate, unhealthy for sensitive groups, unhealthy, very unhealthy, hazardous),
+# good air fading towards see-through so the map shows where the air is clean.
+AQI = Palette(
+    ((0, "#00e40000"), (50, "#00e40080"), (100, "#ffff00e0"), (150, "#ff7e00"), (200, "#ff0000"), (300, "#8f3f97"),
+     (500, "#7e0023")),
+)
+
+# Gases near the ground, µg/m³, each its own hue from see-through clean air; the WHO's 24-hour guideline
+# (NO2 25, SO2 40, CO 4000) and ozone's 8-hour one (100) sit in the middle of the scales.
+NO2_UGM3 = Palette(
+    (
+        (1, "#fde0dd00"), (3, "#fcc5c060"), (10, "#fa9fb5b0"), (25, "#f768a1"), (50, "#dd3497"), (100, "#ae017e"),
+        (200, "#7a0177"), (400, "#49006a"),
+    ),
+    transparent_below=1,
+)
+
+CO_UGM3 = Palette(
+    (
+        (100, "#edf8fb00"), (150, "#bfd3e660"), (250, "#9ebcdab0"), (500, "#8c96c6"), (1000, "#8c6bb1"),
+        (2000, "#88419d"), (4000, "#810f7c"), (10000, "#4d004b"),
+    ),
+    transparent_below=100,
+)
+
+O3_UGM3 = Palette(
+    (
+        (20, "#f7fcf000"), (40, "#ccebc560"), (60, "#a8ddb5b0"), (80, "#7bccc4"), (100, "#43a2ca"),
+        (120, "#0868ac"), (160, "#6a51a3"), (240, "#3f007d"),
+    ),
+    transparent_below=20,
+)
+
+SO2_UGM3 = Palette(
+    (
+        (1, "#ffffe500"), (5, "#fff7bc60"), (20, "#fee391b0"), (40, "#fec44f"), (100, "#fe9929"), (350, "#cc4c02"),
+        (1000, "#662506"),
+    ),
+    transparent_below=1,
+)
+
 # Aerosol optical depth at 550 nm: about 0.1 is clear air, 0.3 visible haze, 1 a thick pall of dust or
 # smoke that dims the sun.
 AEROSOL_OPTICAL_DEPTH = Palette(
