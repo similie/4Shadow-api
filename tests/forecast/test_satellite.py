@@ -226,6 +226,8 @@ def test_an_hour_is_served_like_any_run(tmp_path, small):
     run = RunStore(tmp_path, "satellite").get()
     assert run.forecast_hours.tolist() == [0] and "GMGSI" in run.manifest["source"]["provider"]
     assert run.manifest["static"] == {}
+    # EUMETSAT's credit for its Meteosat images, in the wording its data policy asks for.
+    assert "Contains modified EUMETSAT Meteosat data 2026." in run.manifest["source"]["attribution"]
 
     _, body = point_forecast({"satellite": RunStore(tmp_path, "satellite")}, -8.5, 125.5, model="satellite",
                              tz="UTC", now=hours[-1] + timedelta(minutes=50))

@@ -406,6 +406,9 @@ which allows commercial use; 4Shadow averages them onto 0.25° and to the hour, 
 direction and finds the high and low waters, and the attribution is in `source.attribution`. Satellite
 imagery: NOAA's Global Mosaic of Geostationary Satellite Imagery (GMGSI, NOAA/NESDIS), from GOES (NOAA),
 Meteosat (EUMETSAT) and Himawari (JMA) data, through the NOAA Open Data Dissemination program on AWS
-(`noaa-gmgsi-pds`), whose terms say it "can be used as desired" and ask for credit; 4Shadow averages it onto
-0.1° and leaves out what the satellites see too obliquely, and the attribution is in `source.attribution`. Place names: GeoNames (geonames.org), licensed under
+(`noaa-gmgsi-pds`), whose terms say it "can be used as desired" and ask for credit. Meteosat's hourly images
+are EUMETSAT "Core" data, free and unrestricted under CC BY 4.0 (EUMETSAT Data Policy, amended 25 November
+2025, Articles 5 and 6), credited as "Contains modified EUMETSAT Meteosat data" with the year. 4Shadow
+averages the mosaic onto 0.1° and leaves out what the satellites see too obliquely, and the attribution is
+in `source.attribution`. Place names: GeoNames (geonames.org), licensed under
 CC BY 4.0; responses that use them say so.

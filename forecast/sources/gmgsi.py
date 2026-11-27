@@ -58,8 +58,15 @@ EARTH_RADIUS_KM = 6378.137
 ORBIT_RADIUS_KM = 42164.0
 _HOUR_PATH = re.compile(r"^GMGSI_[A-Z]+/(\d{4})/(\d{2})/(\d{2})/(\d{2})/[^/]+\.nc$")
 
-ATTRIBUTION = ("Satellite: NOAA Global Mosaic of Geostationary Satellite Imagery (GMGSI), from GOES (NOAA), "
-               "Meteosat (EUMETSAT) and Himawari (JMA). 4Shadow averages it onto a 0.1° grid.")
+
+
+def attribution(run: datetime) -> str:
+    """The credit an image of ``run`` carries. Meteosat's hourly images are EUMETSAT "Core" data, free and
+    unrestricted under CC BY 4.0 (EUMETSAT Data Policy, Articles 5.1 and 6.1), and Article 6.3 asks for
+    this wording, with the year."""
+    return ("Satellite: NOAA Global Mosaic of Geostationary Satellite Imagery (GMGSI), from GOES (NOAA), Meteosat "
+            f"and Himawari (JMA) data. Contains modified EUMETSAT Meteosat data {run:%Y}. 4Shadow averages it "
+            "onto a 0.1° grid.")
 
 
 def brightness_temperature(counts: np.ndarray) -> np.ndarray:
@@ -217,8 +224,9 @@ def source_info(base_url: str, run: datetime, products: Sequence[str] = ()) -> d
         "distribution": "NOAA Open Data Dissemination on AWS",
         "url": REGISTRY_URL,
         "bands": list(BANDS),
-        "license": "NOAA open data: \"open to the public and can be used as desired\"; NOAA asks for credit",
-        "attribution": ATTRIBUTION,
+        "license": ("NOAA open data: \"open to the public and can be used as desired\", with credit; Meteosat's "
+                    "hourly images are EUMETSAT Core data, free and unrestricted under CC BY 4.0"),
+        "attribution": attribution(run),
     }
 
 
