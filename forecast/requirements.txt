@@ -12,6 +12,8 @@ requests==2.34.2
 python-dotenv==1.2.4
 # Copernicus Marine's client, for the ocean model (surface currents and tides); only the ingest imports it.
 copernicusmarine==2.5.1
+# The Atmosphere Data Store's client, for CAMS air quality (model "air"); only the ingest imports it.
+ecmwf-datastores-client==0.6.0
 # NetCDF4 reader for NOAA's satellite mosaics (xarray comes with copernicusmarine); only the ingest imports it.
 h5netcdf==1.8.3
 timezonefinder==9.2.0

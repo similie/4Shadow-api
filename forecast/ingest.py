@@ -1,4 +1,5 @@
-"""Ingest model runs (GFS, AIGFS, ECMWF IFS and AIFS, GEFS-Aerosols, the ocean) into the array store.
+"""Ingest model runs (GFS, AIGFS, ECMWF IFS and AIFS, GEFS-Aerosols, CAMS, the ocean, satellite imagery)
+into the array store.
 
     python -m forecast.ingest                    # each model's newest complete run, if it's new
     python -m forecast.ingest --loop             # ...and keep doing so (systemd service)
@@ -8,8 +9,9 @@
 Models come from FORECAST_MODELS (default: all of them) and are ingested one after the other, one run
 at a time each (guarded by a lock file per model). Downloads are prefetched in a small thread pool;
 decoding happens sequentially in step order because ecCodes is not thread-safe and because
-de-accumulating precipitation needs the previous step anyway. The ocean comes as arrays through Copernicus
-Marine's own client (an ``ArraySource``), a step at a time with the next one fetched meanwhile.
+de-accumulating precipitation needs the previous step anyway. The ocean, satellite imagery and CAMS come as
+arrays through their own clients (an ``ArraySource``), a step at a time with the next one fetched
+meanwhile; CAMS's runs are requested from a queue on one poll and read on a later one (``RunPending``).
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import numpy as np
 from .catalog import CATALOGS, GFS, ModelCatalog, Variable
 from .config import Settings, get_settings
 from .sources import SOURCES, ArraySource, gfs
-from .sources.base import StepUnavailable
+from .sources.base import RunPending, StepUnavailable
 from .sources.gfs import FcstSpec, GribClient, IdxRecord
 from .store import RunStore, RunWriter, parse_run_id, prune_runs, published_runs, read_latest, run_id
 
@@ -227,10 +229,13 @@ def _finish(writer: RunWriter, catalog: ModelCatalog, settings: Settings, t0: fl
 def ingest_array_run(run: datetime, settings: Settings, client=None, catalog: ModelCatalog = GFS,
                      max_fhr: int | None = None) -> str:
     """A run of a model read as arrays (an ``ArraySource``): the stored variables' ``grib_param`` name
-    them in the source's dataset, and each step comes already on the source's grid."""
+    them in the source's dataset, and each step comes already on the source's grid. A client that fetches
+    runs ahead (``prepare``) raises ``RunPending`` from it until the run is ready."""
     source = SOURCES[catalog.model]
     client = client or client_for(settings, catalog.model)
     hours = source.forecast_hours(_hours(settings, catalog.model, max_fhr))
+    if hasattr(client, "prepare"):
+        client.prepare(run, hours)
     stored = catalog.stored_variables()
     names = sorted({v.grib_param for v in stored})
     writer = RunWriter(settings.data_root / catalog.model, catalog.model, run, source.grid, hours, stored,
@@ -325,7 +330,11 @@ def ingest_latest(settings: Settings, client: GribClient | None = None, catalog:
     if current is not None and rid <= current and not force:
         log.info("Up to date (latest published run %s)", current)
         return None
-    return ingest_run(candidate, settings, client, catalog, max_fhr)
+    try:
+        return ingest_run(candidate, settings, client, catalog, max_fhr)
+    except RunPending as pending:
+        log.info("%s run %s not ready: %s", catalog.model, rid, pending)
+        return None
 
 
 def ingest_missing(settings: Settings, client, catalog: ModelCatalog, max_fhr: int) -> str | None:
@@ -388,7 +397,10 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 try:
                     if args.run:
-                        ingest_run(parse_run_id(args.run), settings, catalog=catalog, max_fhr=args.max_fhr)
+                        try:
+                            ingest_run(parse_run_id(args.run), settings, catalog=catalog, max_fhr=args.max_fhr)
+                        except RunPending as pending:
+                            log.info("%s run %s not ready: %s; ask again later", model, args.run, pending)
                     else:
                         ingest_latest(settings, catalog=catalog, max_fhr=args.max_fhr, force=args.force)
                     prune_runs(model_root, keep_runs(settings, model))

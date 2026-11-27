@@ -14,6 +14,11 @@ class StepUnavailable(RuntimeError):
     """A step a source hasn't published yet: the run isn't ingested this time."""
 
 
+class RunPending(Exception):
+    """A run a data service is still preparing (a request in its queue): nothing to ingest this poll, and
+    nothing wrong. The message says what it is waiting for."""
+
+
 def _idx_url(file_url: str) -> str:
     return file_url + ".idx"
 
@@ -55,7 +60,9 @@ class ArraySource:
     dict of float32 arrays, NaN where missing), raising ``StepUnavailable`` when the step isn't there yet.
     ``base_url`` is where a run's ``source`` record says the data came from. A client that also has
     ``available_runs()`` (the runs it can read, oldest first) is caught up on every one of those the store
-    lacks, not only the newest: observations, an hour a run, keep each hour.
+    lacks, not only the newest: observations, an hour a run, keep each hour. A client that has
+    ``prepare(run, hours)`` is called with it before the first step: it fetches the run (CAMS's queued
+    requests), raising ``RunPending`` until the run is ready.
     """
 
     model: str
